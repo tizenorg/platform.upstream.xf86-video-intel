@@ -1095,7 +1095,8 @@ TweakMemorySize(ScrnInfoPtr pScrn, CARD32 newsize, Bool preinit)
     int reg = IS_845G(pI830) ? _845_DRAM_RW_CONTROL : _855_DRAM_RW_CONTROL;
     
     if(!pI830->PciInfo 
-       || !(pI830->PciInfo->chipType == PCI_CHIP_I855_GM
+       || !(pI830->PciInfo->chipType == PCI_CHIP_845_G
+	    || pI830->PciInfo->chipType == PCI_CHIP_I855_GM
 	    || pI830->PciInfo->chipType == PCI_CHIP_I865_G))
 	return 0;
 
