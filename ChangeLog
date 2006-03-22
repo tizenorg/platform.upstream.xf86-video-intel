@@ -1,3 +1,14 @@
+2006-03-22  Thomas Hellstrom <thomas-at-tungstengraphics-dot-com>
+
+	* src/i810_driver.c:
+	* src/i830_dri.c: (I830DRIDoMappings):
+	* src/i830_driver.c: (I830DrmMMInit), (I830DrmMMTakedown),
+	(I830BIOSScreenInit), (I830BIOSCloseScreen):
+	* src/i830_memory.c: (I830Allocate3DMemory), (I830FixupOffsets),
+	(I830BindGARTMemory), (I830UnbindGARTMemory):
+	New branch. Initialize the drm memory manager. Don't allocate
+	texture memory.
+	
 2005-12-20  Kevin E. Martin  <kem-at-freedesktop-dot-org>
 
 	* configure.ac:

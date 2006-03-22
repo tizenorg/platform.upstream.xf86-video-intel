@@ -299,6 +299,8 @@ const char *I810drmSymbols[] = {
    "drmGetInterruptFromBusID",
    "drmGetLibVersion",
    "drmGetVersion",
+   "drmMMInit",
+   "drmMMtakedown",
    NULL
 };
 

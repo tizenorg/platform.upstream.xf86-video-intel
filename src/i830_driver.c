@@ -4451,6 +4451,66 @@ I830_dump_registers(ScrnInfoPtr pScrn)
 }
 #endif
 
+#ifdef XF86DRI
+
+#ifndef DRM_MM_TT
+#error "Wrong drm.h file included. You need to compile and install the new libdrm."
+#endif
+
+static int
+I830DrmMMInit(int drmFD, unsigned long vRamOffs, unsigned long vRamSize, 
+	      unsigned long ttPageOffs, unsigned long ttNumPages)
+{
+
+   drm_mm_init_arg_t ma;
+   int ret;
+   
+   memset(&ma, 0, sizeof(ma));
+   ma.req.vr_offset_lo = vRamOffs & 0xFFFFFFFFU;
+   ma.req.vr_offset_lo = vRamOffs & 0xFFFFFFFFU;
+   ma.req.vr_size_lo = vRamSize & 0xFFFFFFFFU;
+   ma.req.tt_p_offset_lo = ttPageOffs & 0xFFFFFFFFU;
+   ma.req.tt_p_size_lo = ttNumPages & 0xFFFFFFFFU;
+   if (sizeof(vRamOffs) == 8) {
+      int shift = 32;
+      
+      ma.req.vr_offset_hi = vRamOffs >> shift;
+      ma.req.vr_size_hi = vRamSize >> shift;
+      ma.req.tt_p_offset_hi = ttPageOffs >> shift;
+      ma.req.tt_p_size_hi = ttNumPages >> shift;
+   }
+   ma.req.op = mm_init;
+   
+   ret = ioctl(drmFD, DRM_IOCTL_MM_INIT, &ma);
+   
+   if (ret)
+      return -errno;
+   
+   return 0;
+   
+   /*
+    * Skip MM Sarea mapping for now. We don't use it in the X server 
+    */
+}
+
+static int
+I830DrmMMTakedown(int drmFD)
+{
+   drm_mm_init_arg_t ma;
+   int ret = 0;
+   
+   ma.req.op = mm_takedown;
+   if (ioctl(drmFD, DRM_IOCTL_MM_INIT, &ma)) {
+      ret = -errno;
+   }
+   
+   return ret;
+}
+
+
+
+#endif
+
 static Bool
 I830BIOSScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **argv)
 {
@@ -4856,8 +4916,45 @@ I830BIOSScreenInit(int scrnIndex, ScreenPtr pScreen, int argc, char **argv)
    pI830->starting = FALSE;
    pI830->closing = FALSE;
    pI830->suspended = FALSE;
+
+#ifdef XF86DRI
+   if (pI830->directRenderingEnabled) {
+      unsigned pageSize = getpagesize();
+      unsigned long aperOffset = 
+	 ROUND_TO(pI830->MemoryAperture.Start, pageSize) / pageSize;
+      unsigned long aperSize = 
+	 ROUND_DOWN_TO(pI830->MemoryAperture.End, pageSize) / pageSize -
+	 aperOffset;
+      
+      if (aperSize < 10) {
+	 xf86DrvMsg(pScrn->scrnIndex, X_ERROR, 
+		    "Too little aperture space for DRI.\n");
+	 pI830->directRenderingOpen = FALSE;
+	 I830DRICloseScreen(pScreen);
+	 pI830->directRenderingEnabled = FALSE;
+      } else {
+	 if (I830DrmMMInit(pI830->drmSubFD, 0, 0, aperOffset, aperSize)) {
+	    xf86DrvMsg(pScrn->scrnIndex, X_ERROR, 
+		       "Could not initialize video memory manager.\n");
+	    
+	    pI830->directRenderingOpen = FALSE;
+	    I830DRICloseScreen(pScreen);
+	    pI830->directRenderingEnabled = FALSE;
+	 } else {
+	    xf86DrvMsg(pScrn->scrnIndex, X_INFO, 
+		       "Initialized video memory manager, %ld AGP pages\n", 
+		       aperSize);
+	    xf86DrvMsg(pScrn->scrnIndex, X_INFO, "at AGP offset 0x%lx\n", 
+		       aperOffset);
+	 }
+	 pI830->MemoryAperture.Size = 0;
+      }
+   }
+#endif
+
    return TRUE;
 }
+
 
 static void
 I830BIOSAdjustFrame(int scrnIndex, int x, int y, int flags)
@@ -5481,6 +5578,7 @@ I830BIOSCloseScreen(int scrnIndex, ScreenPtr pScreen)
    pI830->closing = TRUE;
 #ifdef XF86DRI
    if (pI830->directRenderingOpen) {
+      drmMMTakedown(pI830->drmSubFD);
       pI830->directRenderingOpen = FALSE;
       I830DRICloseScreen(pScreen);
    }

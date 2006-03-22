@@ -664,7 +664,7 @@ I830DRIDoMappings(ScreenPtr pScreen)
    }
    xf86DrvMsg(pScreen->myNum, X_INFO, "[drm] ring buffer = 0x%08x\n",
 	      pI830->ring_map);
-
+#ifdef NOTTM
    pI830DRI->textureSize = pI830->TexMem.Size;
    pI830DRI->logTextureGranularity = pI830->TexGranularity;
 
@@ -679,6 +679,7 @@ I830DRIDoMappings(ScreenPtr pScreen)
    }
    xf86DrvMsg(pScreen->myNum, X_INFO, "[drm] textures = 0x%08x\n",
 	      pI830DRI->textures);
+#endif
 
    if (!I830InitDma(pScrn)) {
       DRICloseScreen(pScreen);
@@ -748,7 +749,9 @@ I830DRIDoMappings(ScreenPtr pScreen)
 
    pI830DRI->bitsPerPixel = pScrn->bitsPerPixel;
 
+#ifdef NOTTM
    pI830DRI->textureOffset = pI830->TexMem.Start;
+#endif
 
    pI830DRI->backOffset = pI830->BackBuffer.Start;
    pI830DRI->depthOffset = pI830->DepthBuffer.Start;

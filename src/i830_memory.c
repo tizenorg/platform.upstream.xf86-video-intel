@@ -1018,6 +1018,9 @@ I830Allocate3DMemory(ScrnInfoPtr pScrn, const int flags)
    /* Allocate the remaining space for textures. */
    memset(&(pI830->TexMem), 0, sizeof(pI830->TexMem));
    pI830->TexMem.Key = -1;
+
+#ifdef NOTTM
+
    size = GetFreeSpace(pScrn);
    if (dryrun && (size < MB(1)))
       size = MB(1);
@@ -1049,6 +1052,7 @@ I830Allocate3DMemory(ScrnInfoPtr pScrn, const int flags)
    xf86DrvMsgVerb(pScrn->scrnIndex, X_INFO, verbosity,
 		  "%sAllocated %ld kB for textures at 0x%lx\n", s,
 		  alloced / 1024, pI830->TexMem.Start);
+#endif
 
    return TRUE;
 }
@@ -1204,7 +1208,9 @@ I830FixupOffsets(ScrnInfoPtr pScrn)
       FixOffset(pScrn, &(pI830->BackBuffer));
       FixOffset(pScrn, &(pI830->DepthBuffer));
       FixOffset(pScrn, &(pI830->ContextMem));
+#ifdef NOTTM
       FixOffset(pScrn, &(pI830->TexMem));
+#endif
    }
 #endif
    return TRUE;
@@ -1528,8 +1534,10 @@ I830BindGARTMemory(ScrnInfoPtr pScrn)
 	    return FALSE;
 	 if (!BindMemRange(pScrn, &(pI830->ContextMem)))
 	    return FALSE;
+#ifdef NOTTM
 	 if (!BindMemRange(pScrn, &(pI830->TexMem)))
 	    return FALSE;
+#endif
       }
 #endif
       pI830->GttBound = 1;
@@ -1600,8 +1608,10 @@ I830UnbindGARTMemory(ScrnInfoPtr pScrn)
 	    return FALSE;
 	 if (!UnbindMemRange(pScrn, &(pI830->ContextMem)))
 	    return FALSE;
+#ifdef NOTTM
 	 if (!UnbindMemRange(pScrn, &(pI830->TexMem)))
 	    return FALSE;
+#endif
       }
 #endif
       if (!xf86ReleaseGART(pScrn->scrnIndex))
