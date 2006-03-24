@@ -5578,7 +5578,8 @@ I830BIOSCloseScreen(int scrnIndex, ScreenPtr pScreen)
    pI830->closing = TRUE;
 #ifdef XF86DRI
    if (pI830->directRenderingOpen) {
-      drmMMTakedown(pI830->drmSubFD);
+      I830DrmMMTakedown(pI830->drmSubFD);
+      
       pI830->directRenderingOpen = FALSE;
       I830DRICloseScreen(pScreen);
    }

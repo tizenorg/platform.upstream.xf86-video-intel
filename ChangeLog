@@ -1,3 +1,8 @@
+2006-03-24  Thomas Hellstrom <thomas-at-tungstengraphics-dot-com>
+
+	* src/i830_driver.c: (I830BIOSCloseScreen):
+	Fix typo.
+	
 2006-03-22  Thomas Hellstrom <thomas-at-tungstengraphics-dot-com>
 
 	* src/i810_driver.c:
