@@ -2,3 +2,5 @@ intel_hotplug
 intel_idle
 intel_reg_dumper
 intel_stepping
+intel_gtt
+intel_statuspage
