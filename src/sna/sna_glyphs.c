@@ -84,6 +84,8 @@
 
 #define N_STACK_GLYPHS 512
 
+#define glyph_valid(g) *((uint32_t *)&(g)->info.width)
+
 #if HAS_DEBUG_FULL
 static void _assert_pixmap_contains_box(PixmapPtr pixmap, BoxPtr box, const char *function)
 {
@@ -108,7 +110,7 @@ extern DevPrivateKeyRec sna_glyph_key;
 
 static inline struct sna_glyph *sna_glyph(GlyphPtr glyph)
 {
-	return dixGetPrivateAddr(&glyph->devPrivates, &sna_glyph_key);
+	return __get_private(glyph, sna_glyph_key);
 }
 
 #define NeedsComponent(f) (PICT_FORMAT_A(f) != 0 && PICT_FORMAT_RGB(f) != 0)
@@ -191,11 +193,17 @@ bool sna_glyphs_create(struct sna *sna)
 	if (sna->render.white_image == NULL)
 		goto bail;
 
-	if (!can_render(sna))
+	if (!can_render(sna)) {
+		DBG(("%s: no render acceleration, no render glyph caches\n",
+		     __FUNCTION__));
 		return true;
+	}
 
-	if (xf86IsEntityShared(sna->scrn->entityList[0]))
+	if (xf86IsEntityShared(sna->scrn->entityList[0])) {
+		DBG(("%s: shared GlyphPictures, no render glyph caches\n",
+		     __FUNCTION__));
 		return true;
+	}
 
 	for (i = 0; i < ARRAY_SIZE(formats); i++) {
 		struct sna_glyph_cache *cache = &sna->render.glyph[i];
@@ -215,9 +223,12 @@ bool sna_glyphs_create(struct sna *sna)
 					      CACHE_PICTURE_SIZE,
 					      CACHE_PICTURE_SIZE,
 					      depth,
-					      SNA_CREATE_SCRATCH);
-		if (!pixmap)
+					      SNA_CREATE_GLYPHS);
+		if (!pixmap) {
+			DBG(("%s: failed to allocate pixmap for Glyph cache\n",
+			     __FUNCTION__));
 			goto bail;
+		}
 
 		priv = sna_pixmap(pixmap);
 		if (priv != NULL) {
@@ -235,6 +246,7 @@ bool sna_glyphs_create(struct sna *sna)
 			goto bail;
 
 		ValidatePicture(picture);
+		assert(picture->pDrawable == &pixmap->drawable);
 
 		cache->count = cache->evict = 0;
 		cache->picture = picture;
@@ -297,7 +309,7 @@ glyph_extents(int nlist,
 		while (n--) {
 			GlyphPtr glyph = *glyphs++;
 
-			if (glyph->info.width && glyph->info.height) {
+			if (glyph_valid(glyph)) {
 				int v;
 
 				v = x - glyph->info.x;
@@ -350,13 +362,19 @@ glyph_cache(ScreenPtr screen,
 	    struct sna_render *render,
 	    GlyphPtr glyph)
 {
-	PicturePtr glyph_picture = GetGlyphPicture(glyph, screen);
-	struct sna_glyph_cache *cache = &render->glyph[PICT_FORMAT_RGB(glyph_picture->format) != 0];
+	PicturePtr glyph_picture;
+	struct sna_glyph_cache *cache;
 	struct sna_glyph *priv;
 	int size, mask, pos, s;
 
 	if (NO_GLYPH_CACHE)
 		return false;
+
+	glyph_picture = GetGlyphPicture(glyph, screen);
+	if (unlikely(glyph_picture == NULL)) {
+		glyph->info.width = glyph->info.height = 0;
+		return false;
+	}
 
 	if (glyph->info.width > GLYPH_MAX_SIZE ||
 	    glyph->info.height > GLYPH_MAX_SIZE) {
@@ -373,6 +391,7 @@ glyph_cache(ScreenPtr screen,
 		if (glyph->info.width <= size && glyph->info.height <= size)
 			break;
 
+	cache = &render->glyph[PICT_FORMAT_RGB(glyph_picture->format) != 0];
 	s = glyph_size_to_count(size);
 	mask = glyph_count_to_mask(s);
 	pos = (cache->count + s - 1) & mask;
@@ -528,7 +547,7 @@ glyphs_to_dst(struct sna *sna,
 			struct sna_glyph priv;
 			int i;
 
-			if (glyph->info.width == 0 || glyph->info.height == 0)
+			if (!glyph_valid(glyph))
 				goto next_glyph;
 
 			priv = *sna_glyph(glyph);
@@ -540,6 +559,10 @@ glyphs_to_dst(struct sna *sna,
 				if (!glyph_cache(screen, &sna->render, glyph)) {
 					/* no cache for this glyph */
 					priv.atlas = GetGlyphPicture(glyph, screen);
+					if (unlikely(priv.atlas == NULL)) {
+						glyph->info.width = glyph->info.height = 0;
+						goto next_glyph;
+					}
 					priv.coordinate.x = priv.coordinate.y = 0;
 				} else
 					priv = *sna_glyph(glyph);
@@ -671,7 +694,7 @@ glyphs_slow(struct sna *sna,
 			BoxPtr rects;
 			int nrect;
 
-			if (glyph->info.width == 0 || glyph->info.height == 0)
+			if (!glyph_valid(glyph))
 				goto next_glyph;
 
 			priv = *sna_glyph(glyph);
@@ -679,6 +702,10 @@ glyphs_slow(struct sna *sna,
 				if (!glyph_cache(screen, &sna->render, glyph)) {
 					/* no cache for this glyph */
 					priv.atlas = GetGlyphPicture(glyph, screen);
+					if (unlikely(priv.atlas == NULL)) {
+						glyph->info.width = glyph->info.height = 0;
+						goto next_glyph;
+					}
 					priv.coordinate.x = priv.coordinate.y = 0;
 				} else
 					priv = *sna_glyph(glyph);
@@ -780,7 +807,7 @@ __sna_glyph_get_image(GlyphPtr g, ScreenPtr s)
 	int dx, dy;
 
 	p = GetGlyphPicture(g, s);
-	if (p == NULL)
+	if (unlikely(p == NULL))
 		return NULL;
 
 	image = image_from_pict(p, FALSE, &dx, &dy);
@@ -917,7 +944,7 @@ glyphs_via_mask(struct sna *sna,
 					GlyphPtr g = *glyphs++;
 					const void *ptr;
 
-					if (g->info.width == 0 || g->info.height == 0)
+					if (!glyph_valid(g))
 						goto next_pglyph;
 
 					ptr = pixman_glyph_cache_lookup(cache, g, NULL);
@@ -968,7 +995,7 @@ next_pglyph:
 				pixman_image_t *glyph_image;
 				int16_t xi, yi;
 
-				if (g->info.width == 0 || g->info.height == 0)
+				if (!glyph_valid(g))
 					goto next_image;
 
 				/* If the mask has been cropped, it is likely
@@ -984,6 +1011,8 @@ next_pglyph:
 
 				glyph_image =
 					sna_glyph_get_image(g, dst->pDrawable->pScreen);
+				if (glyph_image == NULL)
+					goto next_image;
 
 				DBG(("%s: glyph to mask (%d, %d)x(%d, %d)\n",
 				     __FUNCTION__,
@@ -1058,7 +1087,7 @@ next_image:
 				PicturePtr this_atlas;
 				struct sna_composite_rectangles r;
 
-				if (glyph->info.width == 0 || glyph->info.height == 0)
+				if (!glyph_valid(glyph))
 					goto next_glyph;
 
 				priv = sna_glyph(glyph);
@@ -1076,6 +1105,10 @@ next_image:
 					} else {
 						/* no cache for this glyph */
 						this_atlas = GetGlyphPicture(glyph, screen);
+						if (unlikely(this_atlas == NULL)) {
+							glyph->info.width = glyph->info.height = 0;
+							goto next_glyph;
+						}
 						r.src.x = r.src.y = 0;
 					}
 				}
@@ -1090,7 +1123,8 @@ next_image:
 					     __FUNCTION__,
 					     (int)this_atlas->format,
 					     (int)(format->depth << 24 | format->format)));
-					if (this_atlas->format == (format->depth << 24 | format->format)) {
+					if (this_atlas->format == (format->depth << 24 | format->format) &&
+					    (sna->kgem.gen >> 3) != 4) { /* XXX cache corruption? how? */
 						ok = sna->render.composite(sna, PictOpAdd,
 									   this_atlas, NULL, mask,
 									   0, 0, 0, 0, 0, 0,
@@ -1194,7 +1228,7 @@ glyphs_format(int nlist, GlyphListPtr list, GlyphPtr * glyphs)
 		while (n--) {
 			GlyphPtr glyph = *glyphs++;
 
-			if (glyph->info.width == 0 || glyph->info.height == 0) {
+			if (!glyph_valid(glyph)) {
 				x += glyph->info.xOff;
 				y += glyph->info.yOff;
 				continue;
@@ -1333,7 +1367,7 @@ glyphs_fallback(CARD8 op,
 	     __FUNCTION__,
 	     RegionExtents(&region)->x1, RegionExtents(&region)->y1,
 	     RegionExtents(&region)->x2, RegionExtents(&region)->y2));
-	if (!RegionNotEmpty(&region))
+	if (RegionNil(&region))
 		return;
 
 	if (!sna_drawable_move_region_to_cpu(dst->pDrawable, &region,
@@ -1391,7 +1425,7 @@ glyphs_fallback(CARD8 op,
 				GlyphPtr g = *glyphs++;
 				const void *ptr;
 
-				if (g->info.width == 0 || g->info.height == 0)
+				if (!glyph_valid(g))
 					goto next;
 
 				ptr = pixman_glyph_cache_lookup(cache, g, NULL);
@@ -1517,7 +1551,7 @@ out:
 				GlyphPtr g = *glyphs++;
 				pixman_image_t *glyph_image;
 
-				if (g->info.width == 0 || g->info.height == 0)
+				if (!glyph_valid(g))
 					goto next_glyph;
 
 				glyph_image = sna_glyph_get_image(g, screen);
@@ -1654,7 +1688,7 @@ sna_glyphs(CARD8 op,
 	}
 
 	if ((too_small(priv) || DAMAGE_IS_ALL(priv->cpu_damage)) &&
-	    !picture_is_gpu(src)) {
+	    !picture_is_gpu(sna, src)) {
 		DBG(("%s: fallback -- too small (%dx%d)\n",
 		     __FUNCTION__, dst->pDrawable->width, dst->pDrawable->height));
 		goto fallback;
@@ -1810,7 +1844,7 @@ glyphs_via_image(struct sna *sna,
 				GlyphPtr g = *glyphs++;
 				const void *ptr;
 
-				if (g->info.width == 0 || g->info.height == 0)
+				if (!glyph_valid(g))
 					goto next_pglyph;
 
 				ptr = pixman_glyph_cache_lookup(cache, g, NULL);
@@ -1861,7 +1895,7 @@ next_pglyph:
 				pixman_image_t *glyph_image;
 				int16_t xi, yi;
 
-				if (g->info.width == 0 || g->info.height == 0)
+				if (!glyph_valid(g))
 					goto next_image;
 
 				/* If the mask has been cropped, it is likely
@@ -1877,6 +1911,8 @@ next_pglyph:
 
 				glyph_image =
 					sna_glyph_get_image(g, dst->pDrawable->pScreen);
+				if (glyph_image == NULL)
+					goto next_image;
 
 				DBG(("%s: glyph to mask (%d, %d)x(%d, %d)\n",
 				     __FUNCTION__,
@@ -1976,7 +2012,7 @@ sna_glyphs__shared(CARD8 op,
 	}
 
 	if ((too_small(priv) || DAMAGE_IS_ALL(priv->cpu_damage)) &&
-	    !picture_is_gpu(src)) {
+	    !picture_is_gpu(sna, src)) {
 		DBG(("%s: fallback -- too small (%dx%d)\n",
 		     __FUNCTION__, dst->pDrawable->width, dst->pDrawable->height));
 		goto fallback;

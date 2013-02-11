@@ -42,6 +42,8 @@
 
 #include "brw/brw.h"
 #include "gen7_render.h"
+#include "gen4_source.h"
+#include "gen4_vertex.h"
 
 #define NO_COMPOSITE 0
 #define NO_COMPOSITE_SPANS 0
@@ -111,6 +113,24 @@ static const struct gt_info hsw_gt_info = {
 		(8 - 1) << HSW_PS_MAX_THREADS_SHIFT |
 		1 << HSW_PS_SAMPLE_MASK_SHIFT,
 	.urb = { 128, 64, 64 },
+};
+
+static const struct gt_info hsw_gt1_info = {
+	.max_vs_threads = 70,
+	.max_gs_threads = 70,
+	.max_wm_threads =
+		(102 - 1) << HSW_PS_MAX_THREADS_SHIFT |
+		1 << HSW_PS_SAMPLE_MASK_SHIFT,
+	.urb = { 128, 640, 256 },
+};
+
+static const struct gt_info hsw_gt2_info = {
+	.max_vs_threads = 280,
+	.max_gs_threads = 280,
+	.max_wm_threads =
+		(204 - 1) << HSW_PS_MAX_THREADS_SHIFT |
+		1 << HSW_PS_SAMPLE_MASK_SHIFT,
+	.urb = { 256, 1664, 640 },
 };
 
 static const uint32_t ps_kernel_packed[][4] = {
@@ -208,10 +228,6 @@ static const struct blendinfo {
 #define FILL_VERTEX VERTEX_2s2s
 #define FILL_FLAGS(op, format) GEN7_SET_FLAGS(FILL_SAMPLER, gen7_get_blend((op), false, (format)), GEN7_WM_KERNEL_NOMASK, FILL_VERTEX)
 #define FILL_FLAGS_NOBLEND GEN7_SET_FLAGS(FILL_SAMPLER, NO_BLEND, GEN7_WM_KERNEL_NOMASK, FILL_VERTEX)
-
-#define VIDEO_SAMPLER \
-	SAMPLER_OFFSET(SAMPLER_FILTER_BILINEAR, SAMPLER_EXTEND_PAD, \
-		       SAMPLER_FILTER_NEAREST, SAMPLER_EXTEND_NONE)
 
 #define GEN7_SAMPLER(f) (((f) >> 16) & 0xfff0)
 #define GEN7_BLEND(f) (((f) >> 0) & 0x7ff0)
@@ -627,9 +643,9 @@ gen7_emit_cc_invariant(struct sna *sna)
 	OUT_BATCH(0);
 #endif
 
-	assert(is_aligned(sna->render_state.gen7.cc_vp, 32));
+	/* XXX clear to be safe */
 	OUT_BATCH(GEN7_3DSTATE_VIEWPORT_STATE_POINTERS_CC | (2 - 2));
-	OUT_BATCH(sna->render_state.gen7.cc_vp);
+	OUT_BATCH(0);
 }
 
 static void
@@ -865,7 +881,7 @@ gen7_emit_vertex_elements(struct sna *sna,
 	 *    texture coordinate 1 if (has_mask is true): same as above
 	 */
 	struct gen7_render_state *render = &sna->render_state.gen7;
-	uint32_t src_format, dw, offset;
+	uint32_t src_format, dw;
 	int id = GEN7_VERTEX(op->u.gen7.flags);
 	bool has_mask;
 
@@ -874,39 +890,6 @@ gen7_emit_vertex_elements(struct sna *sna,
 	if (render->ve_id == id)
 		return;
 	render->ve_id = id;
-
-	if (id == VERTEX_2s2s) {
-		DBG(("%s: setup COPY\n", __FUNCTION__));
-
-		OUT_BATCH(GEN7_3DSTATE_VERTEX_ELEMENTS |
-			  ((2 * (1 + 2)) + 1 - 2));
-
-		OUT_BATCH(VERTEX_2s2s << GEN7_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN7_VE0_VALID |
-			  GEN7_SURFACEFORMAT_R32G32B32A32_FLOAT << GEN7_VE0_FORMAT_SHIFT |
-			  0 << GEN7_VE0_OFFSET_SHIFT);
-		OUT_BATCH(GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_0_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_1_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_2_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_3_SHIFT);
-
-		/* x,y */
-		OUT_BATCH(VERTEX_2s2s << GEN7_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN7_VE0_VALID |
-			  GEN7_SURFACEFORMAT_R16G16_SSCALED << GEN7_VE0_FORMAT_SHIFT |
-			  0 << GEN7_VE0_OFFSET_SHIFT); /* offsets vb in bytes */
-		OUT_BATCH(GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_0_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_1_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_2_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_1_FLT << GEN7_VE1_VFCOMPONENT_3_SHIFT);
-
-		OUT_BATCH(VERTEX_2s2s << GEN7_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN7_VE0_VALID |
-			  GEN7_SURFACEFORMAT_R16G16_SSCALED << GEN7_VE0_FORMAT_SHIFT |
-			  4 << GEN7_VE0_OFFSET_SHIFT);	/* offset vb in bytes */
-		OUT_BATCH(GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_0_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_1_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_2_SHIFT |
-			  GEN7_VFCOMPONENT_STORE_1_FLT << GEN7_VE1_VFCOMPONENT_3_SHIFT);
-		return;
-	}
 
 	/* The VUE layout
 	 *    dword 0-3: pad (0.0, 0.0, 0.0. 0.0)
@@ -936,20 +919,25 @@ gen7_emit_vertex_elements(struct sna *sna,
 		  GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_1_SHIFT |
 		  GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_2_SHIFT |
 		  GEN7_VFCOMPONENT_STORE_1_FLT << GEN7_VE1_VFCOMPONENT_3_SHIFT);
-	offset = 4;
 
 	/* u0, v0, w0 */
-	DBG(("%s: first channel %d floats, offset=%d\n", __FUNCTION__, id & 3, offset));
+	DBG(("%s: first channel %d floats, offset=4b\n", __FUNCTION__, id & 3));
 	dw = GEN7_VFCOMPONENT_STORE_1_FLT << GEN7_VE1_VFCOMPONENT_3_SHIFT;
 	switch (id & 3) {
+	default:
+		assert(0);
+	case 0:
+		src_format = GEN7_SURFACEFORMAT_R16G16_SSCALED;
+		dw |= GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_0_SHIFT;
+		dw |= GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_1_SHIFT;
+		dw |= GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_2_SHIFT;
+		break;
 	case 1:
 		src_format = GEN7_SURFACEFORMAT_R32_FLOAT;
 		dw |= GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_0_SHIFT;
 		dw |= GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_1_SHIFT;
 		dw |= GEN7_VFCOMPONENT_STORE_0 << GEN7_VE1_VFCOMPONENT_2_SHIFT;
 		break;
-	default:
-		assert(0);
 	case 2:
 		src_format = GEN7_SURFACEFORMAT_R32G32_FLOAT;
 		dw |= GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_0_SHIFT;
@@ -965,15 +953,15 @@ gen7_emit_vertex_elements(struct sna *sna,
 	}
 	OUT_BATCH(id << GEN7_VE0_VERTEX_BUFFER_INDEX_SHIFT | GEN7_VE0_VALID |
 		  src_format << GEN7_VE0_FORMAT_SHIFT |
-		  offset << GEN7_VE0_OFFSET_SHIFT);
+		  4 << GEN7_VE0_OFFSET_SHIFT);
 	OUT_BATCH(dw);
-	offset += (id & 3) * sizeof(float);
 
 	/* u1, v1, w1 */
 	if (has_mask) {
-		DBG(("%s: second channel %d floats, offset=%d\n", __FUNCTION__, (id >> 2) & 3, offset));
+		unsigned offset = 4 + ((id & 3) ?: 1) * sizeof(float);
+		DBG(("%s: second channel %d floats, offset=%db\n", __FUNCTION__, id >> 2, offset));
 		dw = GEN7_VFCOMPONENT_STORE_1_FLT << GEN7_VE1_VFCOMPONENT_3_SHIFT;
-		switch ((id >> 2) & 3) {
+		switch (id >> 2) {
 		case 1:
 			src_format = GEN7_SURFACEFORMAT_R32_FLOAT;
 			dw |= GEN7_VFCOMPONENT_STORE_SRC << GEN7_VE1_VFCOMPONENT_0_SHIFT;
@@ -1064,20 +1052,22 @@ gen7_emit_state(struct sna *sna,
 	sna->render_state.gen7.emit_flush = GEN7_READS_DST(op->u.gen7.flags);
 }
 
-static void gen7_magic_ca_pass(struct sna *sna,
+static bool gen7_magic_ca_pass(struct sna *sna,
 			       const struct sna_composite_op *op)
 {
 	struct gen7_render_state *state = &sna->render_state.gen7;
 
 	if (!op->need_magic_ca_pass)
-		return;
+		return false;
 
 	DBG(("%s: CA fixup (%d -> %d)\n", __FUNCTION__,
 	     sna->render.vertex_start, sna->render.vertex_index));
 
 	gen7_emit_pipe_invalidate(sna);
 
-	gen7_emit_cc(sna, gen7_get_blend(PictOpAdd, true, op->dst.format));
+	gen7_emit_cc(sna,
+		     GEN7_BLEND(gen7_get_blend(PictOpAdd, true,
+					       op->dst.format)));
 	gen7_emit_wm(sna,
 		     gen7_choose_composite_kernel(PictOpAdd,
 						  true, true,
@@ -1092,155 +1082,7 @@ static void gen7_magic_ca_pass(struct sna *sna,
 	OUT_BATCH(0);	/* index buffer offset, ignored */
 
 	state->last_primitive = sna->kgem.nbatch;
-}
-
-static void gen7_vertex_flush(struct sna *sna)
-{
-	assert(sna->render_state.gen7.vertex_offset);
-
-	DBG(("%s[%x] = %d\n", __FUNCTION__,
-	     4*sna->render_state.gen7.vertex_offset,
-	     sna->render.vertex_index - sna->render.vertex_start));
-	sna->kgem.batch[sna->render_state.gen7.vertex_offset] =
-		sna->render.vertex_index - sna->render.vertex_start;
-	sna->render_state.gen7.vertex_offset = 0;
-}
-
-static int gen7_vertex_finish(struct sna *sna)
-{
-	struct kgem_bo *bo;
-	unsigned int i;
-
-	assert(sna->render.vertex_used);
-	assert(sna->render.nvertex_reloc);
-
-	/* Note: we only need dword alignment (currently) */
-
-	bo = sna->render.vbo;
-	if (bo) {
-		if (sna->render_state.gen7.vertex_offset)
-			gen7_vertex_flush(sna);
-
-		for (i = 0; i < sna->render.nvertex_reloc; i++) {
-			DBG(("%s: reloc[%d] = %d\n", __FUNCTION__,
-			     i, sna->render.vertex_reloc[i]));
-
-			sna->kgem.batch[sna->render.vertex_reloc[i]] =
-				kgem_add_reloc(&sna->kgem,
-					       sna->render.vertex_reloc[i], bo,
-					       I915_GEM_DOMAIN_VERTEX << 16,
-					       0);
-			sna->kgem.batch[sna->render.vertex_reloc[i]+1] =
-				kgem_add_reloc(&sna->kgem,
-					       sna->render.vertex_reloc[i]+1, bo,
-					       I915_GEM_DOMAIN_VERTEX << 16,
-					       sna->render.vertex_used * 4 - 1);
-		}
-
-		sna->render.nvertex_reloc = 0;
-		sna->render.vertex_used = 0;
-		sna->render.vertex_index = 0;
-		sna->render_state.gen7.vb_id = 0;
-
-		kgem_bo_destroy(&sna->kgem, bo);
-	}
-
-	sna->render.vertices = NULL;
-	sna->render.vbo = kgem_create_linear(&sna->kgem,
-					     256*1024, CREATE_GTT_MAP);
-	if (sna->render.vbo)
-		sna->render.vertices = kgem_bo_map(&sna->kgem, sna->render.vbo);
-	if (sna->render.vertices == NULL) {
-		if (sna->render.vbo)
-			kgem_bo_destroy(&sna->kgem, sna->render.vbo);
-		sna->render.vbo = NULL;
-		return 0;
-	}
-
-	kgem_bo_sync__cpu(&sna->kgem, sna->render.vbo);
-	if (sna->render.vertex_used) {
-		memcpy(sna->render.vertices,
-		       sna->render.vertex_data,
-		       sizeof(float)*sna->render.vertex_used);
-	}
-	sna->render.vertex_size = 64 * 1024 - 1;
-	return sna->render.vertex_size - sna->render.vertex_used;
-}
-
-static void gen7_vertex_close(struct sna *sna)
-{
-	struct kgem_bo *bo, *free_bo = NULL;
-	unsigned int i, delta = 0;
-
-	assert(sna->render_state.gen7.vertex_offset == 0);
-
-	if (!sna->render_state.gen7.vb_id)
-		return;
-
-	DBG(("%s: used=%d, vbo active? %d\n",
-	     __FUNCTION__, sna->render.vertex_used, sna->render.vbo ? sna->render.vbo->handle : 0));
-
-	bo = sna->render.vbo;
-	if (bo) {
-		if (sna->render.vertex_size - sna->render.vertex_used < 64) {
-			DBG(("%s: discarding vbo (full), handle=%d\n", __FUNCTION__, sna->render.vbo->handle));
-			sna->render.vbo = NULL;
-			sna->render.vertices = sna->render.vertex_data;
-			sna->render.vertex_size = ARRAY_SIZE(sna->render.vertex_data);
-			free_bo = bo;
-		}
-	} else {
-		if (sna->kgem.nbatch + sna->render.vertex_used <= sna->kgem.surface) {
-			DBG(("%s: copy to batch: %d @ %d\n", __FUNCTION__,
-			     sna->render.vertex_used, sna->kgem.nbatch));
-			memcpy(sna->kgem.batch + sna->kgem.nbatch,
-			       sna->render.vertex_data,
-			       sna->render.vertex_used * 4);
-			delta = sna->kgem.nbatch * 4;
-			bo = NULL;
-			sna->kgem.nbatch += sna->render.vertex_used;
-		} else {
-			bo = kgem_create_linear(&sna->kgem,
-						4*sna->render.vertex_used, 0);
-			if (bo && !kgem_bo_write(&sna->kgem, bo,
-						 sna->render.vertex_data,
-						 4*sna->render.vertex_used)) {
-				kgem_bo_destroy(&sna->kgem, bo);
-				bo = NULL;
-			}
-			DBG(("%s: new vbo: %d\n", __FUNCTION__,
-			     sna->render.vertex_used));
-			free_bo = bo;
-		}
-	}
-
-	assert(sna->render.nvertex_reloc);
-	for (i = 0; i < sna->render.nvertex_reloc; i++) {
-		DBG(("%s: reloc[%d] = %d\n", __FUNCTION__,
-		     i, sna->render.vertex_reloc[i]));
-
-		sna->kgem.batch[sna->render.vertex_reloc[i]] =
-			kgem_add_reloc(&sna->kgem,
-				       sna->render.vertex_reloc[i], bo,
-				       I915_GEM_DOMAIN_VERTEX << 16,
-				       delta);
-		sna->kgem.batch[sna->render.vertex_reloc[i]+1] =
-			kgem_add_reloc(&sna->kgem,
-				       sna->render.vertex_reloc[i]+1, bo,
-				       I915_GEM_DOMAIN_VERTEX << 16,
-				       delta + sna->render.vertex_used * 4 - 1);
-	}
-	sna->render.nvertex_reloc = 0;
-
-	if (sna->render.vbo == NULL) {
-		sna->render.vertex_used = 0;
-		sna->render.vertex_index = 0;
-		assert(sna->render.vertices == sna->render.vertex_data);
-		assert(sna->render.vertex_size == ARRAY_SIZE(sna->render.vertex_data));
-	}
-
-	if (free_bo)
-		kgem_bo_destroy(&sna->kgem, free_bo);
+	return true;
 }
 
 static void null_create(struct sna_static_stream *stream)
@@ -1315,16 +1157,6 @@ sampler_fill_init(struct gen7_sampler_state *ss)
 	sampler_state_init(ss+1, SAMPLER_FILTER_NEAREST, SAMPLER_EXTEND_NONE);
 }
 
-static uint32_t gen7_create_cc_viewport(struct sna_static_stream *stream)
-{
-	struct gen7_cc_viewport vp;
-
-	vp.min_depth = -1.e35;
-	vp.max_depth = 1.e35;
-
-	return sna_static_stream_add(stream, &vp, sizeof(vp), 32);
-}
-
 static uint32_t
 gen7_tiling_bits(uint32_t tiling)
 {
@@ -1351,11 +1183,12 @@ gen7_bind_bo(struct sna *sna,
 	uint32_t *ss;
 	uint32_t domains;
 	int offset;
+	uint32_t is_scanout = is_dst && bo->scanout;
 
 	COMPILE_TIME_ASSERT(sizeof(struct gen7_surface_state) == 32);
 
 	/* After the first bind, we manage the cache domains within the batch */
-	offset = kgem_bo_get_binding(bo, format);
+	offset = kgem_bo_get_binding(bo, format | is_scanout << 31);
 	if (offset) {
 		if (is_dst)
 			kgem_bo_mark_dirty(bo);
@@ -1377,13 +1210,13 @@ gen7_bind_bo(struct sna *sna,
 		 (height - 1) << GEN7_SURFACE_HEIGHT_SHIFT);
 	ss[3] = (bo->pitch - 1) << GEN7_SURFACE_PITCH_SHIFT;
 	ss[4] = 0;
-	ss[5] = 0;
+	ss[5] = is_scanout ? 0 : 3 << 16;
 	ss[6] = 0;
 	ss[7] = 0;
-	if (sna->kgem.gen == 75)
+	if (sna->kgem.gen == 075)
 		ss[7] |= HSW_SURFACE_SWIZZLE(RED, GREEN, BLUE, ALPHA);
 
-	kgem_bo_set_binding(bo, format, offset);
+	kgem_bo_set_binding(bo, format | is_scanout << 31, offset);
 
 	DBG(("[%x] bind bo(handle=%d, addr=%d), format=%d, width=%d, height=%d, pitch=%d, tiling=%d -> %s\n",
 	     offset, bo->handle, ss[1],
@@ -1391,251 +1224,6 @@ gen7_bind_bo(struct sna *sna,
 	     domains & 0xffff ? "render" : "sampler"));
 
 	return offset * sizeof(uint32_t);
-}
-
-fastcall static void
-gen7_emit_composite_primitive_solid(struct sna *sna,
-				    const struct sna_composite_op *op,
-				    const struct sna_composite_rectangles *r)
-{
-	float *v;
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 9;
-	assert(sna->render.vertex_used <= sna->render.vertex_size);
-	assert(!too_large(op->dst.x + r->dst.x + r->width,
-			  op->dst.y + r->dst.y + r->height));
-
-	dst.p.x = r->dst.x + r->width;
-	dst.p.y = r->dst.y + r->height;
-	v[0] = dst.f;
-	dst.p.x = r->dst.x;
-	v[3] = dst.f;
-	dst.p.y = r->dst.y;
-	v[6] = dst.f;
-
-	v[5] = v[2] = v[1] = 1.;
-	v[8] = v[7] = v[4] = 0.;
-}
-
-fastcall static void
-gen7_emit_composite_primitive_identity_source(struct sna *sna,
-					      const struct sna_composite_op *op,
-					      const struct sna_composite_rectangles *r)
-{
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-	float *v;
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 9;
-
-	dst.p.x = r->dst.x + r->width;
-	dst.p.y = r->dst.y + r->height;
-	v[0] = dst.f;
-	dst.p.x = r->dst.x;
-	v[3] = dst.f;
-	dst.p.y = r->dst.y;
-	v[6] = dst.f;
-
-	v[7] = v[4] = (r->src.x + op->src.offset[0]) * op->src.scale[0];
-	v[1] = v[4] + r->width * op->src.scale[0];
-
-	v[8] = (r->src.y + op->src.offset[1]) * op->src.scale[1];
-	v[5] = v[2] = v[8] + r->height * op->src.scale[1];
-}
-
-fastcall static void
-gen7_emit_composite_primitive_simple_source(struct sna *sna,
-					    const struct sna_composite_op *op,
-					    const struct sna_composite_rectangles *r)
-{
-	float *v;
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-
-	float xx = op->src.transform->matrix[0][0];
-	float x0 = op->src.transform->matrix[0][2];
-	float yy = op->src.transform->matrix[1][1];
-	float y0 = op->src.transform->matrix[1][2];
-	float sx = op->src.scale[0];
-	float sy = op->src.scale[1];
-	int16_t tx = op->src.offset[0];
-	int16_t ty = op->src.offset[1];
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 3*3;
-
-	dst.p.x = r->dst.x + r->width;
-	dst.p.y = r->dst.y + r->height;
-	v[0] = dst.f;
-	v[1] = ((r->src.x + r->width + tx) * xx + x0) * sx;
-	v[5] = v[2] = ((r->src.y + r->height + ty) * yy + y0) * sy;
-
-	dst.p.x = r->dst.x;
-	v[3] = dst.f;
-	v[7] = v[4] = ((r->src.x + tx) * xx + x0) * sx;
-
-	dst.p.y = r->dst.y;
-	v[6] = dst.f;
-	v[8] = ((r->src.y + ty) * yy + y0) * sy;
-}
-
-fastcall static void
-gen7_emit_composite_primitive_affine_source(struct sna *sna,
-					    const struct sna_composite_op *op,
-					    const struct sna_composite_rectangles *r)
-{
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-	float *v;
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 9;
-
-	dst.p.x = r->dst.x + r->width;
-	dst.p.y = r->dst.y + r->height;
-	v[0] = dst.f;
-	_sna_get_transformed_coordinates(op->src.offset[0] + r->src.x + r->width,
-					 op->src.offset[1] + r->src.y + r->height,
-					 op->src.transform,
-					 &v[1], &v[2]);
-	v[1] *= op->src.scale[0];
-	v[2] *= op->src.scale[1];
-
-	dst.p.x = r->dst.x;
-	v[3] = dst.f;
-	_sna_get_transformed_coordinates(op->src.offset[0] + r->src.x,
-					 op->src.offset[1] + r->src.y + r->height,
-					 op->src.transform,
-					 &v[4], &v[5]);
-	v[4] *= op->src.scale[0];
-	v[5] *= op->src.scale[1];
-
-	dst.p.y = r->dst.y;
-	v[6] = dst.f;
-	_sna_get_transformed_coordinates(op->src.offset[0] + r->src.x,
-					 op->src.offset[1] + r->src.y,
-					 op->src.transform,
-					 &v[7], &v[8]);
-	v[7] *= op->src.scale[0];
-	v[8] *= op->src.scale[1];
-}
-
-fastcall static void
-gen7_emit_composite_primitive_identity_source_mask(struct sna *sna,
-						   const struct sna_composite_op *op,
-						   const struct sna_composite_rectangles *r)
-{
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-	float src_x, src_y;
-	float msk_x, msk_y;
-	float w, h;
-	float *v;
-
-	src_x = r->src.x + op->src.offset[0];
-	src_y = r->src.y + op->src.offset[1];
-	msk_x = r->mask.x + op->mask.offset[0];
-	msk_y = r->mask.y + op->mask.offset[1];
-	w = r->width;
-	h = r->height;
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 15;
-
-	dst.p.x = r->dst.x + r->width;
-	dst.p.y = r->dst.y + r->height;
-	v[0] = dst.f;
-	v[1] = (src_x + w) * op->src.scale[0];
-	v[2] = (src_y + h) * op->src.scale[1];
-	v[3] = (msk_x + w) * op->mask.scale[0];
-	v[4] = (msk_y + h) * op->mask.scale[1];
-
-	dst.p.x = r->dst.x;
-	v[5] = dst.f;
-	v[6] = src_x * op->src.scale[0];
-	v[7] = v[2];
-	v[8] = msk_x * op->mask.scale[0];
-	v[9] = v[4];
-
-	dst.p.y = r->dst.y;
-	v[10] = dst.f;
-	v[11] = v[6];
-	v[12] = src_y * op->src.scale[1];
-	v[13] = v[8];
-	v[14] = msk_y * op->mask.scale[1];
-}
-
-inline static void
-gen7_emit_composite_texcoord(struct sna *sna,
-			     const struct sna_composite_channel *channel,
-			     int16_t x, int16_t y)
-{
-	x += channel->offset[0];
-	y += channel->offset[1];
-
-	if (channel->is_affine) {
-		float s, t;
-
-		sna_get_transformed_coordinates(x, y,
-						channel->transform,
-						&s, &t);
-		OUT_VERTEX_F(s * channel->scale[0]);
-		OUT_VERTEX_F(t * channel->scale[1]);
-	} else {
-		float s, t, w;
-
-		sna_get_transformed_coordinates_3d(x, y,
-						   channel->transform,
-						   &s, &t, &w);
-		OUT_VERTEX_F(s * channel->scale[0]);
-		OUT_VERTEX_F(t * channel->scale[1]);
-		OUT_VERTEX_F(w);
-	}
-}
-
-static void
-gen7_emit_composite_vertex(struct sna *sna,
-			   const struct sna_composite_op *op,
-			   int16_t srcX, int16_t srcY,
-			   int16_t mskX, int16_t mskY,
-			   int16_t dstX, int16_t dstY)
-{
-	OUT_VERTEX(dstX, dstY);
-	gen7_emit_composite_texcoord(sna, &op->src, srcX, srcY);
-	gen7_emit_composite_texcoord(sna, &op->mask, mskX, mskY);
-}
-
-fastcall static void
-gen7_emit_composite_primitive(struct sna *sna,
-			      const struct sna_composite_op *op,
-			      const struct sna_composite_rectangles *r)
-{
-	gen7_emit_composite_vertex(sna, op,
-				   r->src.x + r->width,  r->src.y + r->height,
-				   r->mask.x + r->width, r->mask.y + r->height,
-				   r->dst.x + r->width, r->dst.y + r->height);
-	gen7_emit_composite_vertex(sna, op,
-				   r->src.x,  r->src.y + r->height,
-				   r->mask.x, r->mask.y + r->height,
-				   r->dst.x,  r->dst.y + r->height);
-	gen7_emit_composite_vertex(sna, op,
-				   r->src.x,  r->src.y,
-				   r->mask.x, r->mask.y,
-				   r->dst.x,  r->dst.y);
 }
 
 static void gen7_emit_vertex_buffer(struct sna *sna,
@@ -1650,22 +1238,22 @@ static void gen7_emit_vertex_buffer(struct sna *sna,
 		  4*op->floats_per_vertex << GEN7_VB0_BUFFER_PITCH_SHIFT);
 	sna->render.vertex_reloc[sna->render.nvertex_reloc++] = sna->kgem.nbatch;
 	OUT_BATCH(0);
-	OUT_BATCH(0);
+	OUT_BATCH(~0); /* max address: disabled */
 	OUT_BATCH(0);
 
-	sna->render_state.gen7.vb_id |= 1 << id;
+	sna->render.vb_id |= 1 << id;
 }
 
 static void gen7_emit_primitive(struct sna *sna)
 {
 	if (sna->kgem.nbatch == sna->render_state.gen7.last_primitive) {
-		sna->render_state.gen7.vertex_offset = sna->kgem.nbatch - 5;
+		sna->render.vertex_offset = sna->kgem.nbatch - 5;
 		return;
 	}
 
 	OUT_BATCH(GEN7_3DPRIMITIVE | (7- 2));
 	OUT_BATCH(GEN7_3DPRIMITIVE_VERTEX_SEQUENTIAL | _3DPRIM_RECTLIST);
-	sna->render_state.gen7.vertex_offset = sna->kgem.nbatch;
+	sna->render.vertex_offset = sna->kgem.nbatch;
 	OUT_BATCH(0);	/* vertex count, to be filled in later */
 	OUT_BATCH(sna->render.vertex_index);
 	OUT_BATCH(1);	/* single instance */
@@ -1682,13 +1270,16 @@ static bool gen7_rectangle_begin(struct sna *sna,
 	int id = 1 << GEN7_VERTEX(op->u.gen7.flags);
 	int ndwords;
 
+	if (sna_vertex_wait__locked(&sna->render) && sna->render.vertex_offset)
+		return true;
+
 	ndwords = op->need_magic_ca_pass ? 60 : 6;
-	if ((sna->render_state.gen7.vb_id & id) == 0)
+	if ((sna->render.vb_id & id) == 0)
 		ndwords += 5;
 	if (!kgem_check_batch(&sna->kgem, ndwords))
 		return false;
 
-	if ((sna->render_state.gen7.vb_id & id) == 0)
+	if ((sna->render.vb_id & id) == 0)
 		gen7_emit_vertex_buffer(sna, op);
 
 	gen7_emit_primitive(sna);
@@ -1698,17 +1289,28 @@ static bool gen7_rectangle_begin(struct sna *sna,
 static int gen7_get_rectangles__flush(struct sna *sna,
 				      const struct sna_composite_op *op)
 {
+	/* Preventing discarding new vbo after lock contention */
+	if (sna_vertex_wait__locked(&sna->render)) {
+		int rem = vertex_space(sna);
+		if (rem > op->floats_per_rect)
+			return rem;
+	}
+
 	if (!kgem_check_batch(&sna->kgem, op->need_magic_ca_pass ? 65 : 6))
 		return 0;
-	if (!kgem_check_exec(&sna->kgem, 1))
-		return 0;
-	if (!kgem_check_reloc(&sna->kgem, 2))
+	if (!kgem_check_reloc_and_exec(&sna->kgem, 2))
 		return 0;
 
-	if (op->need_magic_ca_pass && sna->render.vbo)
-		return 0;
+	if (sna->render.vertex_offset) {
+		gen4_vertex_flush(sna);
+		if (gen7_magic_ca_pass(sna, op)) {
+			gen7_emit_pipe_invalidate(sna);
+			gen7_emit_cc(sna, GEN7_BLEND(op->u.gen7.flags));
+			gen7_emit_wm(sna, GEN7_KERNEL(op->u.gen7.flags));
+		}
+	}
 
-	return gen7_vertex_finish(sna);
+	return gen4_vertex_finish(sna);
 }
 
 inline static int gen7_get_rectangles(struct sna *sna,
@@ -1720,7 +1322,7 @@ inline static int gen7_get_rectangles(struct sna *sna,
 
 start:
 	rem = vertex_space(sna);
-	if (rem < op->floats_per_rect) {
+	if (unlikely(rem < op->floats_per_rect)) {
 		DBG(("flushing vbo for %s: %d < %d\n",
 		     __FUNCTION__, rem, op->floats_per_rect));
 		rem = gen7_get_rectangles__flush(sna, op);
@@ -1728,7 +1330,7 @@ start:
 			goto flush;
 	}
 
-	if (unlikely(sna->render_state.gen7.vertex_offset == 0 &&
+	if (unlikely(sna->render.vertex_offset == 0 &&
 		     !gen7_rectangle_begin(sna, op)))
 		goto flush;
 
@@ -1740,10 +1342,11 @@ start:
 	return want;
 
 flush:
-	if (sna->render_state.gen7.vertex_offset) {
-		gen7_vertex_flush(sna);
+	if (sna->render.vertex_offset) {
+		gen4_vertex_flush(sna);
 		gen7_magic_ca_pass(sna, op);
 	}
+	sna_vertex_wait__locked(&sna->render);
 	_kgem_submit(&sna->kgem);
 	emit_state(sna, op);
 	goto start;
@@ -1766,20 +1369,10 @@ inline static uint32_t *gen7_composite_get_binding_table(struct sna *sna,
 	return table;
 }
 
-static uint32_t
-gen7_choose_composite_vertex_buffer(const struct sna_composite_op *op)
-{
-	int id = 2 + !op->is_affine;
-	if (op->mask.bo)
-		id |= id << 2;
-	assert(id > 0 && id < 16);
-	return id;
-}
-
 static void
-gen7_get_batch(struct sna *sna)
+gen7_get_batch(struct sna *sna, const struct sna_composite_op *op)
 {
-	kgem_set_mode(&sna->kgem, KGEM_RENDER);
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, op->dst.bo);
 
 	if (!kgem_check_batch_with_surfaces(&sna->kgem, 150, 4)) {
 		DBG(("%s: flushing batch: %d < %d+%d\n",
@@ -1802,7 +1395,7 @@ static void gen7_emit_composite_state(struct sna *sna,
 	uint32_t *binding_table;
 	uint16_t offset;
 
-	gen7_get_batch(sna);
+	gen7_get_batch(sna, op);
 
 	binding_table = gen7_composite_get_binding_table(sna, &offset);
 
@@ -1842,7 +1435,7 @@ gen7_align_vertex(struct sna *sna, const struct sna_composite_op *op)
 {
 	if (op->floats_per_vertex != sna->render_state.gen7.floats_per_vertex) {
 		if (sna->render.vertex_size - sna->render.vertex_used < 2*op->floats_per_rect)
-			gen7_vertex_finish(sna);
+			gen4_vertex_finish(sna);
 
 		DBG(("aligning vertex: was %d, now %d floats per vertex, %d->%d\n",
 		     sna->render_state.gen7.floats_per_vertex,
@@ -1887,9 +1480,9 @@ gen7_render_composite_box(struct sna *sna,
 }
 
 static void
-gen7_render_composite_boxes(struct sna *sna,
-			    const struct sna_composite_op *op,
-			    const BoxRec *box, int nbox)
+gen7_render_composite_boxes__blt(struct sna *sna,
+				 const struct sna_composite_op *op,
+				 const BoxRec *box, int nbox)
 {
 	DBG(("composite_boxes(%d)\n", nbox));
 
@@ -1917,6 +1510,62 @@ gen7_render_composite_boxes(struct sna *sna,
 			box++;
 		} while (--nbox_this_time);
 	} while (nbox);
+}
+
+static void
+gen7_render_composite_boxes(struct sna *sna,
+			    const struct sna_composite_op *op,
+			    const BoxRec *box, int nbox)
+{
+	DBG(("%s: nbox=%d\n", __FUNCTION__, nbox));
+
+	do {
+		int nbox_this_time;
+		float *v;
+
+		nbox_this_time = gen7_get_rectangles(sna, op, nbox,
+						     gen7_emit_composite_state);
+		assert(nbox_this_time);
+		nbox -= nbox_this_time;
+
+		v = sna->render.vertices + sna->render.vertex_used;
+		sna->render.vertex_used += nbox_this_time * op->floats_per_rect;
+
+		op->emit_boxes(op, box, nbox_this_time, v);
+		box += nbox_this_time;
+	} while (nbox);
+}
+
+static void
+gen7_render_composite_boxes__thread(struct sna *sna,
+				    const struct sna_composite_op *op,
+				    const BoxRec *box, int nbox)
+{
+	DBG(("%s: nbox=%d\n", __FUNCTION__, nbox));
+
+	sna_vertex_lock(&sna->render);
+	do {
+		int nbox_this_time;
+		float *v;
+
+		nbox_this_time = gen7_get_rectangles(sna, op, nbox,
+						     gen7_emit_composite_state);
+		assert(nbox_this_time);
+		nbox -= nbox_this_time;
+
+		v = sna->render.vertices + sna->render.vertex_used;
+		sna->render.vertex_used += nbox_this_time * op->floats_per_rect;
+
+		sna_vertex_acquire__locked(&sna->render);
+		sna_vertex_unlock(&sna->render);
+
+		op->emit_boxes(op, box, nbox_this_time, v);
+		box += nbox_this_time;
+
+		sna_vertex_lock(&sna->render);
+		sna_vertex_release__locked(&sna->render);
+	} while (nbox);
+	sna_vertex_unlock(&sna->render);
 }
 
 #ifndef MAX
@@ -1998,7 +1647,7 @@ static void gen7_emit_video_state(struct sna *sna,
 	uint16_t offset;
 	int n_src, n;
 
-	gen7_get_batch(sna);
+	gen7_get_batch(sna, op);
 
 	src_surf_base[0] = 0;
 	src_surf_base[1] = 0;
@@ -2059,12 +1708,14 @@ gen7_render_video(struct sna *sna,
 		  RegionPtr dstRegion,
 		  short src_w, short src_h,
 		  short drw_w, short drw_h,
+		  short dx, short dy,
 		  PixmapPtr pixmap)
 {
 	struct sna_composite_op tmp;
-	int nbox, dxo, dyo, pix_xoff, pix_yoff;
+	int nbox, pix_xoff, pix_yoff;
 	float src_scale_x, src_scale_y;
 	struct sna_pixmap *priv;
+	unsigned filter;
 	BoxPtr box;
 
 	DBG(("%s: src=(%d, %d), dst=(%d, %d), %dx[(%d, %d), (%d, %d)...]\n",
@@ -2093,15 +1744,22 @@ gen7_render_video(struct sna *sna,
 	tmp.floats_per_vertex = 3;
 	tmp.floats_per_rect = 9;
 
+	if (src_w == drw_w && src_h == drw_h)
+		filter = SAMPLER_FILTER_NEAREST;
+	else
+		filter = SAMPLER_FILTER_BILINEAR;
+
 	tmp.u.gen7.flags =
-		GEN7_SET_FLAGS(VIDEO_SAMPLER, NO_BLEND,
+		GEN7_SET_FLAGS(SAMPLER_OFFSET(filter, SAMPLER_EXTEND_PAD,
+					      SAMPLER_FILTER_NEAREST, SAMPLER_EXTEND_NONE),
+			       NO_BLEND,
 			       is_planar_fourcc(frame->id) ?
 			       GEN7_WM_KERNEL_VIDEO_PLANAR :
 			       GEN7_WM_KERNEL_VIDEO_PACKED,
 			       2);
 	tmp.priv = frame;
 
-	kgem_set_mode(&sna->kgem, KGEM_RENDER);
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, tmp.dst.bo);
 	if (!kgem_check_bo(&sna->kgem, tmp.dst.bo, frame->bo, NULL)) {
 		kgem_submit(&sna->kgem);
 		assert(kgem_check_bo(&sna->kgem, tmp.dst.bo, frame->bo, NULL));
@@ -2122,9 +1780,6 @@ gen7_render_video(struct sna *sna,
 	pix_yoff = 0;
 #endif
 
-	dxo = dstRegion->extents.x1;
-	dyo = dstRegion->extents.y1;
-
 	/* Use normalized texture coordinates */
 	src_scale_x = ((float)src_w / frame->width) / (float)drw_w;
 	src_scale_y = ((float)src_h / frame->height) / (float)drw_h;
@@ -2142,16 +1797,16 @@ gen7_render_video(struct sna *sna,
 		gen7_get_rectangles(sna, &tmp, 1, gen7_emit_video_state);
 
 		OUT_VERTEX(r.x2, r.y2);
-		OUT_VERTEX_F((box->x2 - dxo) * src_scale_x);
-		OUT_VERTEX_F((box->y2 - dyo) * src_scale_y);
+		OUT_VERTEX_F((box->x2 - dx) * src_scale_x);
+		OUT_VERTEX_F((box->y2 - dy) * src_scale_y);
 
 		OUT_VERTEX(r.x1, r.y2);
-		OUT_VERTEX_F((box->x1 - dxo) * src_scale_x);
-		OUT_VERTEX_F((box->y2 - dyo) * src_scale_y);
+		OUT_VERTEX_F((box->x1 - dx) * src_scale_x);
+		OUT_VERTEX_F((box->y2 - dy) * src_scale_y);
 
 		OUT_VERTEX(r.x1, r.y1);
-		OUT_VERTEX_F((box->x1 - dxo) * src_scale_x);
-		OUT_VERTEX_F((box->y1 - dyo) * src_scale_y);
+		OUT_VERTEX_F((box->x1 - dx) * src_scale_x);
+		OUT_VERTEX_F((box->y1 - dy) * src_scale_y);
 
 		if (!DAMAGE_IS_ALL(priv->gpu_damage)) {
 			sna_damage_add_box(&priv->gpu_damage, &r);
@@ -2161,146 +1816,8 @@ gen7_render_video(struct sna *sna,
 	}
 	priv->clear = false;
 
-	gen7_vertex_flush(sna);
+	gen4_vertex_flush(sna);
 	return true;
-}
-
-static bool
-gen7_composite_solid_init(struct sna *sna,
-			  struct sna_composite_channel *channel,
-			  uint32_t color)
-{
-	DBG(("%s: color=%x\n", __FUNCTION__, color));
-
-	channel->filter = PictFilterNearest;
-	channel->repeat = RepeatNormal;
-	channel->is_affine = true;
-	channel->is_solid  = true;
-	channel->is_opaque = (color >> 24) == 0xff;
-	channel->transform = NULL;
-	channel->width  = 1;
-	channel->height = 1;
-	channel->card_format = GEN7_SURFACEFORMAT_B8G8R8A8_UNORM;
-
-	channel->bo = sna_render_get_solid(sna, color);
-
-	channel->scale[0]  = channel->scale[1]  = 1;
-	channel->offset[0] = channel->offset[1] = 0;
-	return channel->bo != NULL;
-}
-
-static bool
-gen7_composite_linear_init(struct sna *sna,
-			   PicturePtr picture,
-			   struct sna_composite_channel *channel,
-			   int x, int y,
-			   int w, int h,
-			   int dst_x, int dst_y)
-{
-	PictLinearGradient *linear =
-		(PictLinearGradient *)picture->pSourcePict;
-	pixman_fixed_t tx, ty;
-	float x0, y0, sf;
-	float dx, dy;
-
-	DBG(("%s: p1=(%f, %f), p2=(%f, %f), src=(%d, %d), dst=(%d, %d), size=(%d, %d)\n",
-	     __FUNCTION__,
-	     pixman_fixed_to_double(linear->p1.x), pixman_fixed_to_double(linear->p1.y),
-	     pixman_fixed_to_double(linear->p2.x), pixman_fixed_to_double(linear->p2.y),
-	     x, y, dst_x, dst_y, w, h));
-
-	if (linear->p2.x == linear->p1.x && linear->p2.y == linear->p1.y)
-		return 0;
-
-	if (!sna_transform_is_affine(picture->transform)) {
-		DBG(("%s: fallback due to projective transform\n",
-		     __FUNCTION__));
-		return sna_render_picture_fixup(sna, picture, channel,
-						x, y, w, h, dst_x, dst_y);
-	}
-
-	channel->bo = sna_render_get_gradient(sna, (PictGradient *)linear);
-	if (!channel->bo)
-		return 0;
-
-	channel->filter = PictFilterNearest;
-	channel->repeat = picture->repeat ? picture->repeatType : RepeatNone;
-	channel->width  = channel->bo->pitch / 4;
-	channel->height = 1;
-	channel->pict_format = PICT_a8r8g8b8;
-
-	channel->scale[0]  = channel->scale[1]  = 1;
-	channel->offset[0] = channel->offset[1] = 0;
-
-	if (sna_transform_is_translation(picture->transform, &tx, &ty)) {
-		dx = pixman_fixed_to_double(linear->p2.x - linear->p1.x);
-		dy = pixman_fixed_to_double(linear->p2.y - linear->p1.y);
-
-		x0 = pixman_fixed_to_double(linear->p1.x);
-		y0 = pixman_fixed_to_double(linear->p1.y);
-
-		if (tx | ty) {
-			x0 -= pixman_fixed_to_double(tx);
-			y0 -= pixman_fixed_to_double(ty);
-		}
-	} else {
-		struct pixman_f_vector p1, p2;
-		struct pixman_f_transform m, inv;
-
-		pixman_f_transform_from_pixman_transform(&m, picture->transform);
-		DBG(("%s: transform = [%f %f %f, %f %f %f, %f %f %f]\n",
-		     __FUNCTION__,
-		     m.m[0][0], m.m[0][1], m.m[0][2],
-		     m.m[1][0], m.m[1][1], m.m[1][2],
-		     m.m[2][0], m.m[2][1], m.m[2][2]));
-		if (!pixman_f_transform_invert(&inv, &m))
-			return 0;
-
-		p1.v[0] = pixman_fixed_to_double(linear->p1.x);
-		p1.v[1] = pixman_fixed_to_double(linear->p1.y);
-		p1.v[2] = 1.;
-		pixman_f_transform_point(&inv, &p1);
-
-		p2.v[0] = pixman_fixed_to_double(linear->p2.x);
-		p2.v[1] = pixman_fixed_to_double(linear->p2.y);
-		p2.v[2] = 1.;
-		pixman_f_transform_point(&inv, &p2);
-
-		DBG(("%s: untransformed: p1=(%f, %f, %f), p2=(%f, %f, %f)\n",
-		     __FUNCTION__,
-		     p1.v[0], p1.v[1], p1.v[2],
-		     p2.v[0], p2.v[1], p2.v[2]));
-
-		dx = p2.v[0] - p1.v[0];
-		dy = p2.v[1] - p1.v[1];
-
-		x0 = p1.v[0];
-		y0 = p1.v[1];
-	}
-
-	sf = dx*dx + dy*dy;
-	dx /= sf;
-	dy /= sf;
-
-	channel->embedded_transform.matrix[0][0] = pixman_double_to_fixed(dx);
-	channel->embedded_transform.matrix[0][1] = pixman_double_to_fixed(dy);
-	channel->embedded_transform.matrix[0][2] = -pixman_double_to_fixed(dx*(x0+dst_x-x) + dy*(y0+dst_y-y));
-
-	channel->embedded_transform.matrix[1][0] = 0;
-	channel->embedded_transform.matrix[1][1] = 0;
-	channel->embedded_transform.matrix[1][2] = pixman_double_to_fixed(.5);
-
-	channel->embedded_transform.matrix[2][0] = 0;
-	channel->embedded_transform.matrix[2][1] = 0;
-	channel->embedded_transform.matrix[2][2] = pixman_fixed_1;
-
-	channel->transform = &channel->embedded_transform;
-	channel->is_affine = 1;
-
-	DBG(("%s: dx=%f, dy=%f, offset=%f\n",
-	     __FUNCTION__, dx, dy, -dx*(x0-x+dst_x) + -dy*(y0-y+dst_y)));
-
-	return channel->bo != NULL;
 }
 
 static int
@@ -2323,16 +1840,16 @@ gen7_composite_picture(struct sna *sna,
 	channel->card_format = -1;
 
 	if (sna_picture_is_solid(picture, &color))
-		return gen7_composite_solid_init(sna, channel, color);
+		return gen4_channel_init_solid(sna, channel, color);
 
 	if (picture->pDrawable == NULL) {
 		int ret;
 
 		if (picture->pSourcePict->type == SourcePictTypeLinear)
-			return gen7_composite_linear_init(sna, picture, channel,
-							  x, y,
-							  w, h,
-							  dst_x, dst_y);
+			return gen4_channel_init_linear(sna, picture, channel,
+							x, y,
+							w, h,
+							dst_x, dst_y);
 
 		DBG(("%s -- fixup, gradient\n", __FUNCTION__));
 		ret = -1;
@@ -2383,7 +1900,8 @@ gen7_composite_picture(struct sna *sna,
 	channel->card_format = gen7_get_card_format(picture->format);
 	if (channel->card_format == (unsigned)-1)
 		return sna_render_picture_convert(sna, picture, channel, pixmap,
-						  x, y, w, h, dst_x, dst_y);
+						  x, y, w, h, dst_x, dst_y,
+						  false);
 
 	if (too_large(pixmap->drawable.width, pixmap->drawable.height)) {
 		DBG(("%s: extracting from pixmap %dx%d\n", __FUNCTION__,
@@ -2408,8 +1926,8 @@ static void gen7_composite_channel_convert(struct sna_composite_channel *channel
 static void gen7_render_composite_done(struct sna *sna,
 				       const struct sna_composite_op *op)
 {
-	if (sna->render_state.gen7.vertex_offset) {
-		gen7_vertex_flush(sna);
+	if (sna->render.vertex_offset) {
+		gen4_vertex_flush(sna);
 		gen7_magic_ca_pass(sna, op);
 	}
 
@@ -2469,9 +1987,11 @@ gen7_composite_set_target(struct sna *sna,
 	return true;
 }
 
-inline static bool can_switch_to_blt(struct sna *sna)
+inline static bool can_switch_to_blt(struct sna *sna,
+				     struct kgem_bo *bo,
+				     unsigned flags)
 {
-	if (sna->kgem.ring == KGEM_BLT)
+	if (sna->kgem.ring != KGEM_RENDER)
 		return true;
 
 	if (NO_RING_SWITCH)
@@ -2480,7 +2000,13 @@ inline static bool can_switch_to_blt(struct sna *sna)
 	if (!sna->kgem.has_semaphores)
 		return false;
 
-	return sna->kgem.mode == KGEM_NONE || kgem_is_idle(&sna->kgem);
+	if (flags & COPY_LAST)
+		return true;
+
+	if (bo && RQ_IS_BLT(bo->rq))
+		return true;
+
+	return kgem_ring_is_idle(&sna->kgem, KGEM_BLT);
 }
 
 static inline bool untiled_tlb_miss(struct kgem_bo *bo)
@@ -2488,14 +2014,19 @@ static inline bool untiled_tlb_miss(struct kgem_bo *bo)
 	return bo->tiling == I915_TILING_NONE && bo->pitch >= 4096;
 }
 
-static bool prefer_blt_bo(struct sna *sna, struct kgem_bo *bo)
+static int prefer_blt_bo(struct sna *sna, struct kgem_bo *bo)
 {
-	return untiled_tlb_miss(bo) && bo->pitch < MAXSHORT;
+	if (bo->rq)
+		return RQ_IS_BLT(bo->rq) ? 1 : -1;
+
+	return bo->tiling == I915_TILING_NONE || bo->scanout;
 }
 
-inline static bool prefer_blt_ring(struct sna *sna)
+inline static bool prefer_blt_ring(struct sna *sna,
+				   struct kgem_bo *bo,
+				   unsigned flags)
 {
-	return sna->kgem.ring != KGEM_RENDER || can_switch_to_blt(sna);
+	return can_switch_to_blt(sna, bo, flags);
 }
 
 static bool
@@ -2514,17 +2045,8 @@ try_blt(struct sna *sna,
 		return true;
 	}
 
-	if (can_switch_to_blt(sna)) {
-		if (sna_picture_is_solid(src, NULL))
-			return true;
-
-		if (dst->pDrawable == src->pDrawable)
-			return true;
-
-		if (src->pDrawable &&
-		    get_drawable_pixmap(dst->pDrawable) == get_drawable_pixmap(src->pDrawable))
-			return true;
-	}
+	if (sna_picture_is_solid(src, NULL) && can_switch_to_blt(sna, NULL, 0))
+		return true;
 
 	return false;
 }
@@ -2548,12 +2070,6 @@ static bool
 has_alphamap(PicturePtr p)
 {
 	return p->alphaMap != NULL;
-}
-
-static bool
-untransformed(PicturePtr p)
-{
-	return !p->transform || pixman_transform_is_int_translate(p->transform);
 }
 
 static bool
@@ -2602,7 +2118,6 @@ gen7_composite_fallback(struct sna *sna,
 			PicturePtr mask,
 			PicturePtr dst)
 {
-	struct sna_pixmap *priv;
 	PixmapPtr src_pixmap;
 	PixmapPtr mask_pixmap;
 	PixmapPtr dst_pixmap;
@@ -2641,10 +2156,7 @@ gen7_composite_fallback(struct sna *sna,
 	}
 
 	/* If anything is on the GPU, push everything out to the GPU */
-	priv = sna_pixmap(dst_pixmap);
-	if (priv &&
-	    ((priv->gpu_damage && !priv->clear) ||
-	     (priv->cpu_bo && kgem_bo_is_busy(priv->cpu_bo)))) {
+	if (dst_use_gpu(dst_pixmap)) {
 		DBG(("%s: dst is already on the GPU, try to use GPU\n",
 		     __FUNCTION__));
 		return false;
@@ -2679,14 +2191,14 @@ gen7_composite_fallback(struct sna *sna,
 
 	if (too_large(dst_pixmap->drawable.width,
 		      dst_pixmap->drawable.height) &&
-	    (priv == NULL || DAMAGE_IS_ALL(priv->cpu_damage))) {
+	    dst_is_cpu(dst_pixmap)) {
 		DBG(("%s: dst is on the CPU and too large\n", __FUNCTION__));
 		return true;
 	}
 
 	DBG(("%s: dst is not on the GPU and the operation should not fallback\n",
 	     __FUNCTION__));
-	return false;
+	return dst_use_cpu(dst_pixmap);
 }
 
 static int
@@ -2707,7 +2219,7 @@ reuse_source(struct sna *sna,
 	}
 
 	if (sna_picture_is_solid(mask, &color))
-		return gen7_composite_solid_init(sna, mc, color);
+		return gen4_channel_init_solid(sna, mc, color);
 
 	if (sc->is_solid)
 		return false;
@@ -2750,11 +2262,14 @@ prefer_blt_composite(struct sna *sna, struct sna_composite_op *tmp)
 	if (sna->kgem.ring == KGEM_BLT)
 		return true;
 
-	if (!prefer_blt_ring(sna))
+	if (untiled_tlb_miss(tmp->dst.bo) ||
+	    untiled_tlb_miss(tmp->src.bo))
+		return true;
+
+	if (!prefer_blt_ring(sna, tmp->dst.bo, 0))
 		return false;
 
-	return (prefer_blt_bo(sna, tmp->dst.bo) ||
-		prefer_blt_bo(sna, tmp->src.bo));
+	return (prefer_blt_bo(sna, tmp->dst.bo) | prefer_blt_bo(sna, tmp->src.bo)) > 0;
 }
 
 static bool
@@ -2811,7 +2326,7 @@ gen7_render_composite(struct sna *sna,
 	case -1:
 		goto cleanup_dst;
 	case 0:
-		if (!gen7_composite_solid_init(sna, &tmp->src, 0))
+		if (!gen4_channel_init_solid(sna, &tmp->src, 0))
 			goto cleanup_dst;
 		/* fall through to fixup */
 	case 1:
@@ -2835,7 +2350,6 @@ gen7_render_composite(struct sna *sna,
 	tmp->mask.filter = SAMPLER_FILTER_NEAREST;
 	tmp->mask.repeat = SAMPLER_EXTEND_NONE;
 
-	tmp->prim_emit = gen7_emit_composite_primitive;
 	if (mask) {
 		if (mask->componentAlpha && PICT_FORMAT_RGB(mask->format)) {
 			tmp->has_component_alpha = true;
@@ -2865,7 +2379,7 @@ gen7_render_composite(struct sna *sna,
 			case -1:
 				goto cleanup_src;
 			case 0:
-				if (!gen7_composite_solid_init(sna, &tmp->mask, 0))
+				if (!gen4_channel_init_solid(sna, &tmp->mask, 0))
 					goto cleanup_src;
 				/* fall through to fixup */
 			case 1:
@@ -2875,31 +2389,7 @@ gen7_render_composite(struct sna *sna,
 		}
 
 		tmp->is_affine &= tmp->mask.is_affine;
-
-		if (tmp->src.transform == NULL && tmp->mask.transform == NULL)
-			tmp->prim_emit = gen7_emit_composite_primitive_identity_source_mask;
-
-		tmp->floats_per_vertex = 5 + 2 * !tmp->is_affine;
-	} else {
-		if (tmp->src.is_solid) {
-			tmp->prim_emit = gen7_emit_composite_primitive_solid;
-			if (tmp->src.is_opaque && op == PictOpOver)
-				tmp->op = PictOpSrc;
-		} else if (tmp->src.transform == NULL)
-			tmp->prim_emit = gen7_emit_composite_primitive_identity_source;
-		else if (tmp->src.is_affine) {
-			if (tmp->src.transform->matrix[0][1] == 0 &&
-			    tmp->src.transform->matrix[1][0] == 0) {
-				tmp->src.scale[0] /= tmp->src.transform->matrix[2][2];
-				tmp->src.scale[1] /= tmp->src.transform->matrix[2][2];
-				tmp->prim_emit = gen7_emit_composite_primitive_simple_source;
-			} else
-				tmp->prim_emit = gen7_emit_composite_primitive_affine_source;
-		}
-
-		tmp->floats_per_vertex = 3 + !tmp->is_affine;
 	}
-	tmp->floats_per_rect = 3 * tmp->floats_per_vertex;
 
 	tmp->u.gen7.flags =
 		GEN7_SET_FLAGS(SAMPLER_OFFSET(tmp->src.filter,
@@ -2913,14 +2403,18 @@ gen7_render_composite(struct sna *sna,
 							    tmp->mask.bo != NULL,
 							    tmp->has_component_alpha,
 							    tmp->is_affine),
-			       gen7_choose_composite_vertex_buffer(tmp));
+			       gen4_choose_composite_emitter(tmp));
 
 	tmp->blt   = gen7_render_composite_blt;
 	tmp->box   = gen7_render_composite_box;
-	tmp->boxes = gen7_render_composite_boxes;
+	tmp->boxes = gen7_render_composite_boxes__blt;
+	if (tmp->emit_boxes){
+		tmp->boxes = gen7_render_composite_boxes;
+		tmp->thread_boxes = gen7_render_composite_boxes__thread;
+	}
 	tmp->done  = gen7_render_composite_done;
 
-	kgem_set_mode(&sna->kgem, KGEM_RENDER);
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, tmp->dst.bo);
 	if (!kgem_check_bo(&sna->kgem,
 			   tmp->dst.bo, tmp->src.bo, tmp->mask.bo,
 			   NULL)) {
@@ -2949,167 +2443,6 @@ cleanup_dst:
 }
 
 #if !NO_COMPOSITE_SPANS
-inline static void
-gen7_emit_composite_texcoord_affine(struct sna *sna,
-				    const struct sna_composite_channel *channel,
-				    int16_t x, int16_t y)
-{
-	float t[2];
-
-	sna_get_transformed_coordinates(x + channel->offset[0],
-					y + channel->offset[1],
-					channel->transform,
-					&t[0], &t[1]);
-	OUT_VERTEX_F(t[0] * channel->scale[0]);
-	OUT_VERTEX_F(t[1] * channel->scale[1]);
-}
-
-inline static void
-gen7_emit_composite_spans_vertex(struct sna *sna,
-				 const struct sna_composite_spans_op *op,
-				 int16_t x, int16_t y)
-{
-	OUT_VERTEX(x, y);
-	gen7_emit_composite_texcoord(sna, &op->base.src, x, y);
-}
-
-fastcall static void
-gen7_emit_composite_spans_primitive(struct sna *sna,
-				    const struct sna_composite_spans_op *op,
-				    const BoxRec *box,
-				    float opacity)
-{
-	gen7_emit_composite_spans_vertex(sna, op, box->x2, box->y2);
-	OUT_VERTEX_F(opacity);
-
-	gen7_emit_composite_spans_vertex(sna, op, box->x1, box->y2);
-	OUT_VERTEX_F(opacity);
-
-	gen7_emit_composite_spans_vertex(sna, op, box->x1, box->y1);
-	OUT_VERTEX_F(opacity);
-}
-
-fastcall static void
-gen7_emit_composite_spans_solid(struct sna *sna,
-				const struct sna_composite_spans_op *op,
-				const BoxRec *box,
-				float opacity)
-{
-	OUT_VERTEX(box->x2, box->y2);
-	OUT_VERTEX_F(1); OUT_VERTEX_F(1);
-	OUT_VERTEX_F(opacity);
-
-	OUT_VERTEX(box->x1, box->y2);
-	OUT_VERTEX_F(0); OUT_VERTEX_F(1);
-	OUT_VERTEX_F(opacity);
-
-	OUT_VERTEX(box->x1, box->y1);
-	OUT_VERTEX_F(0); OUT_VERTEX_F(0);
-	OUT_VERTEX_F(opacity);
-}
-
-fastcall static void
-gen7_emit_composite_spans_identity(struct sna *sna,
-				   const struct sna_composite_spans_op *op,
-				   const BoxRec *box,
-				   float opacity)
-{
-	float *v;
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-
-	float sx = op->base.src.scale[0];
-	float sy = op->base.src.scale[1];
-	int16_t tx = op->base.src.offset[0];
-	int16_t ty = op->base.src.offset[1];
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 3*4;
-	assert(sna->render.vertex_used <= sna->render.vertex_size);
-
-	dst.p.x = box->x2;
-	dst.p.y = box->y2;
-	v[0] = dst.f;
-	v[1] = (box->x2 + tx) * sx;
-	v[6] = v[2] = (box->y2 + ty) * sy;
-
-	dst.p.x = box->x1;
-	v[4] = dst.f;
-	v[9] = v[5] = (box->x1 + tx) * sx;
-
-	dst.p.y = box->y1;
-	v[8] = dst.f;
-	v[10] = (box->y1 + ty) * sy;
-
-	v[11] = v[7] = v[3] = opacity;
-}
-
-fastcall static void
-gen7_emit_composite_spans_simple(struct sna *sna,
-				 const struct sna_composite_spans_op *op,
-				 const BoxRec *box,
-				 float opacity)
-{
-	float *v;
-	union {
-		struct sna_coordinate p;
-		float f;
-	} dst;
-
-	float xx = op->base.src.transform->matrix[0][0];
-	float x0 = op->base.src.transform->matrix[0][2];
-	float yy = op->base.src.transform->matrix[1][1];
-	float y0 = op->base.src.transform->matrix[1][2];
-	float sx = op->base.src.scale[0];
-	float sy = op->base.src.scale[1];
-	int16_t tx = op->base.src.offset[0];
-	int16_t ty = op->base.src.offset[1];
-
-	v = sna->render.vertices + sna->render.vertex_used;
-	sna->render.vertex_used += 3*4;
-	assert(sna->render.vertex_used <= sna->render.vertex_size);
-
-	dst.p.x = box->x2;
-	dst.p.y = box->y2;
-	v[0] = dst.f;
-	v[1] = ((box->x2 + tx) * xx + x0) * sx;
-	v[6] = v[2] = ((box->y2 + ty) * yy + y0) * sy;
-
-	dst.p.x = box->x1;
-	v[4] = dst.f;
-	v[9] = v[5] = ((box->x1 + tx) * xx + x0) * sx;
-
-	dst.p.y = box->y1;
-	v[8] = dst.f;
-	v[10] = ((box->y1 + ty) * yy + y0) * sy;
-
-	v[11] = v[7] = v[3] = opacity;
-}
-
-fastcall static void
-gen7_emit_composite_spans_affine(struct sna *sna,
-				 const struct sna_composite_spans_op *op,
-				 const BoxRec *box,
-				 float opacity)
-{
-	OUT_VERTEX(box->x2, box->y2);
-	gen7_emit_composite_texcoord_affine(sna, &op->base.src,
-					    box->x2, box->y2);
-	OUT_VERTEX_F(opacity);
-
-	OUT_VERTEX(box->x1, box->y2);
-	gen7_emit_composite_texcoord_affine(sna, &op->base.src,
-					    box->x1, box->y2);
-	OUT_VERTEX_F(opacity);
-
-	OUT_VERTEX(box->x1, box->y1);
-	gen7_emit_composite_texcoord_affine(sna, &op->base.src,
-					    box->x1, box->y1);
-	OUT_VERTEX_F(opacity);
-}
-
 fastcall static void
 gen7_render_composite_spans_box(struct sna *sna,
 				const struct sna_composite_spans_op *op,
@@ -3159,11 +2492,47 @@ gen7_render_composite_spans_boxes(struct sna *sna,
 }
 
 fastcall static void
+gen7_render_composite_spans_boxes__thread(struct sna *sna,
+					  const struct sna_composite_spans_op *op,
+					  const struct sna_opacity_box *box,
+					  int nbox)
+{
+	DBG(("%s: nbox=%d, src=+(%d, %d), dst=+(%d, %d)\n",
+	     __FUNCTION__, nbox,
+	     op->base.src.offset[0], op->base.src.offset[1],
+	     op->base.dst.x, op->base.dst.y));
+
+	sna_vertex_lock(&sna->render);
+	do {
+		int nbox_this_time;
+		float *v;
+
+		nbox_this_time = gen7_get_rectangles(sna, &op->base, nbox,
+						     gen7_emit_composite_state);
+		assert(nbox_this_time);
+		nbox -= nbox_this_time;
+
+		v = sna->render.vertices + sna->render.vertex_used;
+		sna->render.vertex_used += nbox_this_time * op->base.floats_per_rect;
+
+		sna_vertex_acquire__locked(&sna->render);
+		sna_vertex_unlock(&sna->render);
+
+		op->emit_boxes(op, box, nbox_this_time, v);
+		box += nbox_this_time;
+
+		sna_vertex_lock(&sna->render);
+		sna_vertex_release__locked(&sna->render);
+	} while (nbox);
+	sna_vertex_unlock(&sna->render);
+}
+
+fastcall static void
 gen7_render_composite_spans_done(struct sna *sna,
 				 const struct sna_composite_spans_op *op)
 {
-	if (sna->render_state.gen7.vertex_offset)
-		gen7_vertex_flush(sna);
+	if (sna->render.vertex_offset)
+		gen4_vertex_flush(sna);
 
 	DBG(("%s()\n", __FUNCTION__));
 
@@ -3184,12 +2553,11 @@ gen7_check_composite_spans(struct sna *sna,
 	if (gen7_composite_fallback(sna, src, NULL, dst))
 		return false;
 
-	if (need_tiling(sna, width, height)) {
-		if (!is_gpu(dst->pDrawable)) {
-			DBG(("%s: fallback, tiled operation not on GPU\n",
-			     __FUNCTION__));
-			return false;
-		}
+	if (need_tiling(sna, width, height) &&
+	    !is_gpu(sna, dst->pDrawable, PREFER_GPU_SPANS)) {
+		DBG(("%s: fallback, tiled operation not on GPU\n",
+		     __FUNCTION__));
+		return false;
 	}
 
 	return true;
@@ -3232,7 +2600,7 @@ gen7_render_composite_spans(struct sna *sna,
 	case -1:
 		goto cleanup_dst;
 	case 0:
-		if (!gen7_composite_solid_init(sna, &tmp->base.src, 0))
+		if (!gen4_channel_init_solid(sna, &tmp->base.src, 0))
 			goto cleanup_dst;
 		/* fall through to fixup */
 	case 1:
@@ -3244,23 +2612,6 @@ gen7_render_composite_spans(struct sna *sna,
 	tmp->base.is_affine = tmp->base.src.is_affine;
 	tmp->base.need_magic_ca_pass = false;
 
-	tmp->prim_emit = gen7_emit_composite_spans_primitive;
-	if (tmp->base.src.is_solid) {
-		tmp->prim_emit = gen7_emit_composite_spans_solid;
-	} else if (tmp->base.src.transform == NULL) {
-		tmp->prim_emit = gen7_emit_composite_spans_identity;
-	} else if (tmp->base.is_affine) {
-		if (tmp->base.src.transform->matrix[0][1] == 0 &&
-		    tmp->base.src.transform->matrix[1][0] == 0) {
-			tmp->base.src.scale[0] /= tmp->base.src.transform->matrix[2][2];
-			tmp->base.src.scale[1] /= tmp->base.src.transform->matrix[2][2];
-			tmp->prim_emit = gen7_emit_composite_spans_simple;
-		} else
-			tmp->prim_emit = gen7_emit_composite_spans_affine;
-	}
-	tmp->base.floats_per_vertex = 4 + !tmp->base.is_affine;
-	tmp->base.floats_per_rect = 3 * tmp->base.floats_per_vertex;
-
 	tmp->base.u.gen7.flags =
 		GEN7_SET_FLAGS(SAMPLER_OFFSET(tmp->base.src.filter,
 					      tmp->base.src.repeat,
@@ -3268,13 +2619,15 @@ gen7_render_composite_spans(struct sna *sna,
 					      SAMPLER_EXTEND_PAD),
 			       gen7_get_blend(tmp->base.op, false, tmp->base.dst.format),
 			       GEN7_WM_KERNEL_OPACITY | !tmp->base.is_affine,
-			       1 << 2 | (2+!tmp->base.is_affine));
+			       gen4_choose_spans_emitter(tmp));
 
 	tmp->box   = gen7_render_composite_spans_box;
 	tmp->boxes = gen7_render_composite_spans_boxes;
+	if (tmp->emit_boxes)
+		tmp->thread_boxes = gen7_render_composite_spans_boxes__thread;
 	tmp->done  = gen7_render_composite_spans_done;
 
-	kgem_set_mode(&sna->kgem, KGEM_RENDER);
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, tmp->base.dst.bo);
 	if (!kgem_check_bo(&sna->kgem,
 			   tmp->base.dst.bo, tmp->base.src.bo,
 			   NULL)) {
@@ -3307,7 +2660,7 @@ gen7_emit_copy_state(struct sna *sna,
 	uint32_t *binding_table;
 	uint16_t offset;
 
-	gen7_get_batch(sna);
+	gen7_get_batch(sna, op);
 
 	binding_table = gen7_composite_get_binding_table(sna, &offset);
 
@@ -3337,10 +2690,23 @@ static inline bool prefer_blt_copy(struct sna *sna,
 				   struct kgem_bo *dst_bo,
 				   unsigned flags)
 {
-	return (sna->kgem.ring == KGEM_BLT ||
-		(flags & COPY_LAST && sna->kgem.mode == KGEM_NONE) ||
-		prefer_blt_bo(sna, src_bo) ||
-		prefer_blt_bo(sna, dst_bo));
+	if (sna->kgem.ring == KGEM_BLT)
+		return true;
+
+	assert((flags & COPY_SYNC) == 0);
+
+	if (src_bo == dst_bo && can_switch_to_blt(sna, dst_bo, flags))
+		return true;
+
+	if (untiled_tlb_miss(src_bo) ||
+	    untiled_tlb_miss(dst_bo))
+		return true;
+
+	if (!prefer_blt_ring(sna, dst_bo, flags))
+		return false;
+
+	return (prefer_blt_bo(sna, src_bo) >= 0 &&
+		prefer_blt_bo(sna, dst_bo) > 0);
 }
 
 inline static void boxes_extents(const BoxRec *box, int n, BoxRec *extents)
@@ -3386,8 +2752,8 @@ gen7_render_copy_boxes(struct sna *sna, uint8_t alu,
 	struct sna_composite_op tmp;
 	BoxRec extents;
 
-	DBG(("%s (%d, %d)->(%d, %d) x %d, alu=%x, self-copy=%d, overlaps? %d\n",
-	     __FUNCTION__, src_dx, src_dy, dst_dx, dst_dy, n, alu,
+	DBG(("%s (%d, %d)->(%d, %d) x %d, alu=%x, flags=%x, self-copy=%d, overlaps? %d\n",
+	     __FUNCTION__, src_dx, src_dy, dst_dx, dst_dy, n, alu, flags,
 	     src_bo == dst_bo,
 	     overlaps(sna,
 		      src_bo, src_dx, src_dy,
@@ -3421,7 +2787,7 @@ fallback_blt:
 		if (too_large(extents.x2-extents.x1, extents.y2-extents.y1))
 			goto fallback_blt;
 
-		if ((flags & COPY_LAST || can_switch_to_blt(sna)) &&
+		if (can_switch_to_blt(sna, dst_bo, flags) &&
 		    sna_blt_compare_depth(&src->drawable, &dst->drawable) &&
 		    sna_blt_copy_boxes(sna, alu,
 				       src_bo, src_dx, src_dy,
@@ -3523,7 +2889,7 @@ fallback_blt:
 
 	tmp.u.gen7.flags = COPY_FLAGS(alu);
 
-	kgem_set_mode(&sna->kgem, KGEM_RENDER);
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, tmp.dst.bo);
 	if (!kgem_check_bo(&sna->kgem, tmp.dst.bo, tmp.src.bo, NULL)) {
 		kgem_submit(&sna->kgem);
 		if (!kgem_check_bo(&sna->kgem, tmp.dst.bo, tmp.src.bo, NULL))
@@ -3563,7 +2929,7 @@ fallback_blt:
 		} while (--n_this_time);
 	} while (n);
 
-	gen7_vertex_flush(sna);
+	gen4_vertex_flush(sna);
 	sna_render_composite_redirect_done(sna, &tmp);
 	if (tmp.src.bo != src_bo)
 		kgem_bo_destroy(&sna->kgem, tmp.src.bo);
@@ -3576,6 +2942,14 @@ fallback_tiled_dst:
 	if (tmp.redirect.real_bo)
 		kgem_bo_destroy(&sna->kgem, tmp.dst.bo);
 fallback_tiled:
+	if (sna_blt_compare_depth(&src->drawable, &dst->drawable) &&
+	    sna_blt_copy_boxes(sna, alu,
+			       src_bo, src_dx, src_dy,
+			       dst_bo, dst_dx, dst_dy,
+			       dst->drawable.bitsPerPixel,
+			       box, n))
+		return true;
+
 	return sna_tiling_copy_boxes(sna, alu,
 				     src, src_bo, src_dx, src_dy,
 				     dst, dst_bo, dst_dx, dst_dy,
@@ -3608,8 +2982,8 @@ gen7_render_copy_blt(struct sna *sna,
 static void
 gen7_render_copy_done(struct sna *sna, const struct sna_copy_op *op)
 {
-	if (sna->render_state.gen7.vertex_offset)
-		gen7_vertex_flush(sna);
+	if (sna->render.vertex_offset)
+		gen4_vertex_flush(sna);
 }
 
 static bool
@@ -3671,7 +3045,7 @@ fallback:
 
 	op->base.u.gen7.flags = COPY_FLAGS(alu);
 
-	kgem_set_mode(&sna->kgem, KGEM_RENDER);
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, dst_bo);
 	if (!kgem_check_bo(&sna->kgem, dst_bo, src_bo, NULL)) {
 		kgem_submit(&sna->kgem);
 		if (!kgem_check_bo(&sna->kgem, dst_bo, src_bo, NULL))
@@ -3699,7 +3073,7 @@ gen7_emit_fill_state(struct sna *sna, const struct sna_composite_op *op)
 	 * specific kernel.
 	 */
 
-	gen7_get_batch(sna);
+	gen7_get_batch(sna, op);
 
 	binding_table = gen7_composite_get_binding_table(sna, &offset);
 
@@ -3727,7 +3101,10 @@ gen7_emit_fill_state(struct sna *sna, const struct sna_composite_op *op)
 static inline bool prefer_blt_fill(struct sna *sna,
 				   struct kgem_bo *bo)
 {
-	return prefer_blt_ring(sna) || untiled_tlb_miss(bo);
+	if (untiled_tlb_miss(bo))
+		return true;
+
+	return prefer_blt_ring(sna, bo, 0) || prefer_blt_bo(sna, bo) >= 0;
 }
 
 static bool
@@ -3822,6 +3199,7 @@ gen7_render_fill_boxes(struct sna *sna,
 
 	tmp.u.gen7.flags = FILL_FLAGS(op, format);
 
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, dst_bo);
 	if (!kgem_check_bo(&sna->kgem, dst_bo, NULL)) {
 		kgem_submit(&sna->kgem);
 		assert(kgem_check_bo(&sna->kgem, dst_bo, NULL));
@@ -3855,7 +3233,7 @@ gen7_render_fill_boxes(struct sna *sna,
 		} while (--n_this_time);
 	} while (n);
 
-	gen7_vertex_flush(sna);
+	gen4_vertex_flush(sna);
 	kgem_bo_destroy(&sna->kgem, tmp.src.bo);
 	sna_render_composite_redirect_done(sna, &tmp);
 	return true;
@@ -3946,8 +3324,8 @@ gen7_render_fill_op_boxes(struct sna *sna,
 static void
 gen7_render_fill_op_done(struct sna *sna, const struct sna_fill_op *op)
 {
-	if (sna->render_state.gen7.vertex_offset)
-		gen7_vertex_flush(sna);
+	if (sna->render.vertex_offset)
+		gen4_vertex_flush(sna);
 	kgem_bo_destroy(&sna->kgem, op->base.src.bo);
 }
 
@@ -3995,6 +3373,7 @@ gen7_render_fill(struct sna *sna, uint8_t alu,
 
 	op->base.u.gen7.flags = FILL_FLAGS_NOBLEND;
 
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, dst_bo);
 	if (!kgem_check_bo(&sna->kgem, dst_bo, NULL)) {
 		kgem_submit(&sna->kgem);
 		assert(kgem_check_bo(&sna->kgem, dst_bo, NULL));
@@ -4072,9 +3451,13 @@ gen7_render_fill_one(struct sna *sna, PixmapPtr dst, struct kgem_bo *bo,
 
 	tmp.u.gen7.flags = FILL_FLAGS_NOBLEND;
 
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, bo);
 	if (!kgem_check_bo(&sna->kgem, bo, NULL)) {
-		_kgem_submit(&sna->kgem);
-		assert(kgem_check_bo(&sna->kgem, bo, NULL));
+		kgem_submit(&sna->kgem);
+		if (kgem_check_bo(&sna->kgem, bo, NULL)) {
+			kgem_bo_destroy(&sna->kgem, tmp.src.bo);
+			return false;
+		}
 	}
 
 	gen7_emit_fill_state(sna, &tmp);
@@ -4095,7 +3478,7 @@ gen7_render_fill_one(struct sna *sna, PixmapPtr dst, struct kgem_bo *bo,
 	v[7] = v[2]  = v[3]  = 1;
 	v[6] = v[10] = v[11] = 0;
 
-	gen7_vertex_flush(sna);
+	gen4_vertex_flush(sna);
 	kgem_bo_destroy(&sna->kgem, tmp.src.bo);
 
 	return true;
@@ -4152,9 +3535,13 @@ gen7_render_clear(struct sna *sna, PixmapPtr dst, struct kgem_bo *bo)
 
 	tmp.u.gen7.flags = FILL_FLAGS_NOBLEND;
 
+	kgem_set_mode(&sna->kgem, KGEM_RENDER, bo);
 	if (!kgem_check_bo(&sna->kgem, bo, NULL)) {
-		_kgem_submit(&sna->kgem);
-		assert(kgem_check_bo(&sna->kgem, bo, NULL));
+		kgem_submit(&sna->kgem);
+		if (!kgem_check_bo(&sna->kgem, bo, NULL)) {
+			kgem_bo_destroy(&sna->kgem, tmp.src.bo);
+			return false;
+		}
 	}
 
 	gen7_emit_fill_state(sna, &tmp);
@@ -4174,7 +3561,7 @@ gen7_render_clear(struct sna *sna, PixmapPtr dst, struct kgem_bo *bo)
 	v[7] = v[2]  = v[3]  = 1;
 	v[6] = v[10] = v[11] = 0;
 
-	gen7_vertex_flush(sna);
+	gen4_vertex_flush(sna);
 	kgem_bo_destroy(&sna->kgem, tmp.src.bo);
 
 	return true;
@@ -4182,20 +3569,20 @@ gen7_render_clear(struct sna *sna, PixmapPtr dst, struct kgem_bo *bo)
 
 static void gen7_render_flush(struct sna *sna)
 {
-	gen7_vertex_close(sna);
+	gen4_vertex_close(sna);
+
+	assert(sna->render.vb_id == 0);
+	assert(sna->render.vertex_offset == 0);
 }
 
 static void
 gen7_render_context_switch(struct kgem *kgem,
 			   int new_mode)
 {
-	if (!new_mode)
-		return;
-
-	if (kgem->mode) {
+	if (kgem->nbatch) {
 		DBG(("%s: switch rings %d -> %d\n",
 		     __FUNCTION__, kgem->mode, new_mode));
-		kgem_submit(kgem);
+		_kgem_submit(kgem);
 	}
 
 	kgem->ring = new_mode;
@@ -4238,7 +3625,6 @@ static void gen7_render_reset(struct sna *sna)
 {
 	sna->render_state.gen7.emit_flush = false;
 	sna->render_state.gen7.needs_invariant = true;
-	sna->render_state.gen7.vb_id = 0;
 	sna->render_state.gen7.ve_id = 3 << 2;
 	sna->render_state.gen7.last_primitive = -1;
 
@@ -4249,11 +3635,25 @@ static void gen7_render_reset(struct sna *sna)
 	sna->render_state.gen7.drawrect_offset = -1;
 	sna->render_state.gen7.drawrect_limit = -1;
 	sna->render_state.gen7.surface_table = -1;
+
+	sna->render.vertex_offset = 0;
+	sna->render.nvertex_reloc = 0;
+	sna->render.vb_id = 0;
 }
 
 static void gen7_render_fini(struct sna *sna)
 {
 	kgem_bo_destroy(&sna->kgem, sna->render_state.gen7.general_bo);
+}
+
+static bool is_gt2(struct sna *sna)
+{
+	return DEVICE_ID(sna->PciInfo) & 0x20;
+}
+
+static bool is_mobile(struct sna *sna)
+{
+	return (DEVICE_ID(sna->PciInfo) & 0xf) == 0x6;
 }
 
 static bool gen7_render_setup(struct sna *sna)
@@ -4263,15 +3663,20 @@ static bool gen7_render_setup(struct sna *sna)
 	struct gen7_sampler_state *ss;
 	int i, j, k, l, m;
 
-	if (sna->kgem.gen == 70) {
+	if (sna->kgem.gen == 070) {
 		state->info = &ivb_gt_info;
 		if (DEVICE_ID(sna->PciInfo) & 0xf) {
 			state->info = &ivb_gt1_info;
-			if (DEVICE_ID(sna->PciInfo) & 0x20)
+			if (is_gt2(sna))
 				state->info = &ivb_gt2_info; /* XXX requires GT_MODE WiZ disabled */
 		}
-	} else if (sna->kgem.gen == 75) {
+	} else if (sna->kgem.gen == 075) {
 		state->info = &hsw_gt_info;
+		if (DEVICE_ID(sna->PciInfo) & 0xf) {
+			state->info = &hsw_gt1_info;
+			if (is_gt2(sna))
+				state->info = &hsw_gt2_info;
+		}
 	} else
 		return false;
 
@@ -4331,7 +3736,6 @@ static bool gen7_render_setup(struct sna *sna)
 		}
 	}
 
-	state->cc_vp = gen7_create_cc_viewport(&general);
 	state->cc_blend = gen7_composite_create_blend_state(&general);
 
 	state->general_bo = sna_static_stream_fini(sna, &general);
@@ -4349,10 +3753,13 @@ bool gen7_render_init(struct sna *sna)
 
 #if !NO_COMPOSITE
 	sna->render.composite = gen7_render_composite;
+	sna->render.prefer_gpu |= PREFER_GPU_RENDER;
 #endif
 #if !NO_COMPOSITE_SPANS
 	sna->render.check_composite_spans = gen7_check_composite_spans;
 	sna->render.composite_spans = gen7_render_composite_spans;
+	if (is_mobile(sna))
+		sna->render.prefer_gpu |= PREFER_GPU_SPANS;
 #endif
 	sna->render.video = gen7_render_video;
 

@@ -221,11 +221,19 @@ static Bool I830GetEarlyOptions(ScrnInfoPtr scrn)
 	return TRUE;
 }
 
+static Bool intel_option_cast_string_to_bool(intel_screen_private *intel,
+					     int id, Bool val)
+{
+	xf86getBoolValue(&val, xf86GetOptValString(intel->Options, id));
+	return val;
+}
+
 static void intel_check_dri_option(ScrnInfoPtr scrn)
 {
 	intel_screen_private *intel = intel_get_screen_private(scrn);
+
 	intel->directRenderingType = DRI_NONE;
-	if (!xf86ReturnOptValBool(intel->Options, OPTION_DRI, TRUE))
+	if (!intel_option_cast_string_to_bool(intel, OPTION_DRI, TRUE))
 		intel->directRenderingType = DRI_DISABLED;
 
 	if (scrn->depth != 16 && scrn->depth != 24 && scrn->depth != 30) {
@@ -317,7 +325,7 @@ static int intel_init_bufmgr(intel_screen_private *intel)
 
 	list_init(&intel->batch_pixmaps);
 
-	if ((INTEL_INFO(intel)->gen == 60)) {
+	if ((INTEL_INFO(intel)->gen == 060)) {
 		intel->wa_scratch_bo =
 			drm_intel_bo_alloc(intel->bufmgr, "wa scratch",
 					   4096, 4096);
@@ -397,13 +405,14 @@ static Bool can_accelerate_blt(struct intel_screen_private *intel)
 	if (INTEL_INFO(intel)->gen == -1)
 		return FALSE;
 
-	if (xf86ReturnOptValBool(intel->Options, OPTION_ACCEL_DISABLE, FALSE)) {
+	if (xf86ReturnOptValBool(intel->Options, OPTION_ACCEL_DISABLE, FALSE) ||
+	    !intel_option_cast_string_to_bool(intel, OPTION_ACCEL_METHOD, TRUE)) {
 		xf86DrvMsg(intel->scrn->scrnIndex, X_CONFIG,
 			   "Disabling hardware acceleration.\n");
 		return FALSE;
 	}
 
-	if (INTEL_INFO(intel)->gen == 60) {
+	if (INTEL_INFO(intel)->gen == 060) {
 		struct pci_device *const device = intel->PciInfo;
 
 		/* Sandybridge rev07 locks up easily, even with the
@@ -418,7 +427,7 @@ static Bool can_accelerate_blt(struct intel_screen_private *intel)
 		}
 	}
 
-	if (INTEL_INFO(intel)->gen >= 60) {
+	if (INTEL_INFO(intel)->gen >= 060) {
 		drm_i915_getparam_t gp;
 		int value;
 
@@ -579,7 +588,7 @@ static Bool I830PreInit(ScrnInfoPtr scrn, int flags)
 	intel->has_relaxed_fencing =
 		xf86ReturnOptValBool(intel->Options,
 				     OPTION_RELAXED_FENCING,
-				     INTEL_INFO(intel)->gen >= 33);
+				     INTEL_INFO(intel)->gen >= 033);
 	/* And override the user if there is no kernel support */
 	if (intel->has_relaxed_fencing)
 		intel->has_relaxed_fencing = has_relaxed_fencing(intel);
@@ -677,7 +686,7 @@ void IntelEmitInvarientState(ScrnInfoPtr scrn)
 }
 
 #ifdef INTEL_PIXMAP_SHARING
-static Bool
+static void
 redisplay_dirty(ScreenPtr screen, PixmapDirtyUpdatePtr dirty)
 {
 	ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
@@ -686,8 +695,19 @@ redisplay_dirty(ScreenPtr screen, PixmapDirtyUpdatePtr dirty)
 	int was_blocked;
 
 	PixmapRegionInit(&pixregion, dirty->slave_dst->master_pixmap);
+	RegionTranslate(&pixregion, dirty->x, dirty->y);
+	RegionIntersect(&pixregion, &pixregion, DamageRegion(dirty->damage));
+	RegionTranslate(&pixregion, -dirty->x, -dirty->y);
+	was_blocked = RegionNil(&pixregion);
+	DamageRegionAppend(&dirty->slave_dst->drawable, &pixregion);
+	RegionUninit(&pixregion);
+	if (was_blocked)
+		return;
 
+	PixmapRegionInit(&pixregion, dirty->slave_dst->master_pixmap);
 	PixmapSyncDirtyHelper(dirty, &pixregion);
+	RegionUninit(&pixregion);
+
 	intel_batch_submit(scrn);
 	if (!intel->has_prime_vmap_flush) {
 		drm_intel_bo *bo = intel_get_pixmap_bo(dirty->slave_dst->master_pixmap);
@@ -695,10 +715,10 @@ redisplay_dirty(ScreenPtr screen, PixmapDirtyUpdatePtr dirty)
 		drm_intel_bo_map(bo, FALSE);
 		drm_intel_bo_unmap(bo);
 		xf86UnblockSIGIO(was_blocked);
-        }
-        DamageRegionAppend(&dirty->slave_dst->drawable, &pixregion);
-        RegionUninit(&pixregion);
-	return 0;
+	}
+
+	DamageRegionProcessPending(&dirty->slave_dst->drawable);
+	return;
 }
 
 static void
@@ -710,7 +730,6 @@ intel_dirty_update(ScreenPtr screen)
 	if (xorg_list_is_empty(&screen->pixmap_dirty_list))
 	    return;
 
-	ErrorF("list is not empty\n");
 	xorg_list_for_each_entry(ent, &screen->pixmap_dirty_list, ent) {
 		region = DamageRegion(ent->damage);
 		if (RegionNotEmpty(region)) {
@@ -921,7 +940,7 @@ I830ScreenInit(SCREEN_INIT_ARGS_DECL)
 
 	intel_batch_init(scrn);
 
-	if (INTEL_INFO(intel)->gen >= 40)
+	if (INTEL_INFO(intel)->gen >= 040)
 		gen4_render_state_init(scrn);
 
 	miClearVisualTypes();
@@ -1014,7 +1033,7 @@ I830ScreenInit(SCREEN_INIT_ARGS_DECL)
 	xf86DPMSInit(screen, xf86DPMSSet, 0);
 
 #ifdef INTEL_XVMC
-	if (INTEL_INFO(intel)->gen >= 40)
+	if (INTEL_INFO(intel)->gen >= 040)
 		intel->XvMCEnabled = TRUE;
 	from = ((intel->directRenderingType == DRI_DRI2) &&
 		xf86GetOptValBool(intel->Options, OPTION_XVMC,
@@ -1139,6 +1158,8 @@ static Bool I830CloseScreen(CLOSE_SCREEN_ARGS_DECL)
 	I830UeventFini(scrn);
 #endif
 
+	intel_mode_close(intel);
+
 	DeleteCallback(&FlushCallback, intel_flush_callback, scrn);
 
 	intel_glamor_close_screen(screen);
@@ -1174,7 +1195,7 @@ static Bool I830CloseScreen(CLOSE_SCREEN_ARGS_DECL)
 
 	intel_batch_teardown(scrn);
 
-	if (INTEL_INFO(intel)->gen >= 40)
+	if (INTEL_INFO(intel)->gen >= 040)
 		gen4_render_state_cleanup(scrn);
 
 	xf86_cursors_fini(screen);

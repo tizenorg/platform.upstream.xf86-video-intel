@@ -62,7 +62,6 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 #include <sys/ioctl.h>
 #include <sys/fcntl.h>
-#include <sys/poll.h>
 #include "i915_drm.h"
 
 #ifdef HAVE_VALGRIND
@@ -78,11 +77,6 @@ DevPrivateKeyRec sna_pixmap_key;
 DevPrivateKeyRec sna_gc_key;
 DevPrivateKeyRec sna_window_key;
 DevPrivateKeyRec sna_glyph_key;
-
-static Bool sna_enter_vt(VT_FUNC_ARGS_DECL);
-
-/* temporary */
-extern void xf86SetCursor(ScreenPtr screen, CursorPtr pCurs, int x, int y);
 
 static void
 sna_load_palette(ScrnInfoPtr scrn, int numColors, int *indices,
@@ -150,6 +144,79 @@ sna_load_palette(ScrnInfoPtr scrn, int numColors, int *indices,
 	}
 }
 
+static void
+sna_set_fallback_mode(ScrnInfoPtr scrn)
+{
+	xf86CrtcConfigPtr config = XF86_CRTC_CONFIG_PTR(scrn);
+	xf86OutputPtr output = NULL;
+	xf86CrtcPtr crtc = NULL;
+	int n;
+
+	if ((unsigned)config->compat_output < config->num_output) {
+		output = config->output[config->compat_output];
+		crtc = output->crtc;
+	}
+
+	for (n = 0; n < config->num_output; n++)
+		config->output[n]->crtc = NULL;
+	for (n = 0; n < config->num_crtc; n++)
+		config->crtc[n]->enabled = FALSE;
+
+	if (output && crtc) {
+		DisplayModePtr mode;
+
+		output->crtc = crtc;
+
+		mode = xf86OutputFindClosestMode(output, scrn->currentMode);
+		if (mode &&
+		    xf86CrtcSetModeTransform(crtc, mode, RR_Rotate_0, NULL, 0, 0)) {
+			crtc->desiredMode = *mode;
+			crtc->desiredMode.prev = crtc->desiredMode.next = NULL;
+			crtc->desiredMode.name = NULL;
+			crtc->desiredMode.PrivSize = 0;
+			crtc->desiredMode.PrivFlags = 0;
+			crtc->desiredMode.Private = NULL;
+			crtc->desiredRotation = RR_Rotate_0;
+			crtc->desiredTransformPresent = FALSE;
+			crtc->desiredX = 0;
+			crtc->desiredY = 0;
+			crtc->enabled = TRUE;
+		}
+	}
+
+	xf86DisableUnusedFunctions(scrn);
+#ifdef RANDR_12_INTERFACE
+	if (root(scrn->pScreen))
+		xf86RandR12TellChanged(scrn->pScreen);
+#endif
+}
+
+static Bool sna_become_master(struct sna *sna)
+{
+	ScrnInfoPtr scrn = sna->scrn;
+
+	DBG(("%s\n", __FUNCTION__));
+
+	if (drmSetMaster(sna->kgem.fd)) {
+		sleep(2); /* XXX wait for the current master to decease */
+		if (drmSetMaster(sna->kgem.fd)) {
+			xf86DrvMsg(scrn->scrnIndex, X_ERROR,
+					"drmSetMaster failed: %s\n",
+					strerror(errno));
+			return FALSE;
+		}
+	}
+
+	if (!xf86SetDesiredModes(scrn)) {
+		xf86DrvMsg(scrn->scrnIndex, X_WARNING,
+			   "failed to restore desired modes on VT switch\n");
+		sna_set_fallback_mode(scrn);
+	}
+
+	sna_mode_disable_unused(sna);
+	return TRUE;
+}
+
 /**
  * Adjust the screen pixmap for the current location of the front buffer.
  * This is done at EnterVT when buffers are bound as long as the resources
@@ -158,7 +225,6 @@ sna_load_palette(ScrnInfoPtr scrn, int numColors, int *indices,
  */
 static Bool sna_create_screen_resources(ScreenPtr screen)
 {
-	ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
 	struct sna *sna = to_sna_from_screen(screen);
 
 	DBG(("%s(%dx%d@%d)\n", __FUNCTION__,
@@ -197,7 +263,7 @@ static Bool sna_create_screen_resources(ScreenPtr screen)
 
 	sna_copy_fbcon(sna);
 
-	if (!sna_enter_vt(VT_FUNC_ARGS(0))) {
+	if (!sna_become_master(sna)) {
 		xf86DrvMsg(screen->myNum, X_ERROR,
 			   "[intel] Failed to become DRM master\n");
 		goto cleanup_front;
@@ -363,6 +429,12 @@ static void sna_setup_capabilities(ScrnInfoPtr scrn, int fd)
 #endif
 }
 
+static Bool sna_option_cast_to_bool(struct sna *sna, int id, Bool val)
+{
+	xf86getBoolValue(&val, xf86GetOptValString(sna->Options, id));
+	return val;
+}
+
 /**
  * This is called before ScreenInit to do any require probing of screen
  * configuration.
@@ -468,7 +540,8 @@ static Bool sna_pre_init(ScrnInfoPtr scrn, int flags)
 	intel_detect_chipset(scrn, sna->pEnt, sna->PciInfo);
 
 	kgem_init(&sna->kgem, fd, sna->PciInfo, sna->info->gen);
-	if (xf86ReturnOptValBool(sna->Options, OPTION_ACCEL_DISABLE, FALSE)) {
+	if (xf86ReturnOptValBool(sna->Options, OPTION_ACCEL_DISABLE, FALSE) ||
+	    !sna_option_cast_to_bool(sna, OPTION_ACCEL_METHOD, TRUE)) {
 		xf86DrvMsg(sna->scrn->scrnIndex, X_CONFIG,
 			   "Disabling hardware acceleration.\n");
 		sna->kgem.wedged = true;
@@ -493,12 +566,10 @@ static Bool sna_pre_init(ScrnInfoPtr scrn, int flags)
 		sna->tiling &= ~SNA_TILING_FB;
 
 	sna->flags = 0;
-	if (!xf86ReturnOptValBool(sna->Options, OPTION_THROTTLE, TRUE))
-		sna->flags |= SNA_NO_THROTTLE;
-	if (!xf86ReturnOptValBool(sna->Options, OPTION_DELAYED_FLUSH, TRUE))
-		sna->flags |= SNA_NO_DELAYED_FLUSH;
 	if (!xf86ReturnOptValBool(sna->Options, OPTION_SWAPBUFFERS_WAIT, TRUE))
 		sna->flags |= SNA_NO_WAIT;
+	if (xf86ReturnOptValBool(sna->Options, OPTION_TRIPLE_BUFFER, TRUE))
+		sna->flags |= SNA_TRIPLE_BUFFER;
 	if (has_pageflipping(sna)) {
 		if (xf86ReturnOptValBool(sna->Options, OPTION_TEAR_FREE, FALSE))
 			sna->flags |= SNA_TEAR_FREE;
@@ -511,12 +582,6 @@ static Bool sna_pre_init(ScrnInfoPtr scrn, int flags)
 		   sna->tiling & SNA_TILING_FB ? "tiled" : "linear");
 	xf86DrvMsg(scrn->scrnIndex, X_CONFIG, "Pixmaps %s\n",
 		   sna->tiling & SNA_TILING_2D ? "tiled" : "linear");
-	xf86DrvMsg(scrn->scrnIndex, X_CONFIG, "3D buffers %s\n",
-		   sna->tiling & SNA_TILING_3D ? "tiled" : "linear");
-	xf86DrvMsg(scrn->scrnIndex, X_CONFIG, "Throttling %sabled\n",
-		   sna->flags & SNA_NO_THROTTLE ? "dis" : "en");
-	xf86DrvMsg(scrn->scrnIndex, X_CONFIG, "Delayed flush %sabled\n",
-		   sna->flags & SNA_NO_DELAYED_FLUSH ? "dis" : "en");
 	xf86DrvMsg(scrn->scrnIndex, X_CONFIG, "\"Tear free\" %sabled\n",
 		   sna->flags & SNA_TEAR_FREE ? "en" : "dis");
 	xf86DrvMsg(scrn->scrnIndex, X_CONFIG, "Forcing per-crtc-pixmaps? %s\n",
@@ -543,7 +608,7 @@ static Bool sna_pre_init(ScrnInfoPtr scrn, int flags)
 	xf86SetDpi(scrn, 0, 0);
 
 	sna->dri_available = false;
-	if (xf86ReturnOptValBool(sna->Options, OPTION_DRI, TRUE))
+	if (sna_option_cast_to_bool(sna, OPTION_DRI, TRUE))
 		sna->dri_available = !!xf86LoadSubModule(scrn, "dri2");
 
 	return TRUE;
@@ -552,9 +617,11 @@ static Bool sna_pre_init(ScrnInfoPtr scrn, int flags)
 static void
 sna_block_handler(BLOCKHANDLER_ARGS_DECL)
 {
-	SCREEN_PTR(arg);
-	ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
-	struct sna *sna = to_sna(scrn);
+#ifndef XF86_SCRN_INTERFACE
+	struct sna *sna = to_sna(xf86Screens[arg]);
+#else
+	struct sna *sna = to_sna_from_screen(arg);
+#endif
 	struct timeval **tv = timeout;
 
 	DBG(("%s (tv=%ld.%06ld)\n", __FUNCTION__,
@@ -569,9 +636,11 @@ sna_block_handler(BLOCKHANDLER_ARGS_DECL)
 static void
 sna_wakeup_handler(WAKEUPHANDLER_ARGS_DECL)
 {
-	SCREEN_PTR(arg);
-	ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
-	struct sna *sna = to_sna(scrn);
+#ifndef XF86_SCRN_INTERFACE
+	struct sna *sna = to_sna(xf86Screens[arg]);
+#else
+	struct sna *sna = to_sna_from_screen(arg);
+#endif
 
 	DBG(("%s\n", __FUNCTION__));
 
@@ -639,11 +708,14 @@ sna_uevent_init(ScrnInfoPtr scrn)
 
 	DBG(("%s\n", __FUNCTION__));
 
-	if (!xf86GetOptValBool(sna->Options, OPTION_HOTPLUG, &hotplug)) {
-		from = X_DEFAULT;
-		hotplug = TRUE;
-	}
+	/* RandR will be disabled if Xinerama is active, and so generating
+	 * RR hotplug events is then verboten.
+	 */
+	if (!dixPrivateKeyRegistered(rrPrivKey))
+		return;
 
+	if (!xf86GetOptValBool(sna->Options, OPTION_HOTPLUG, &hotplug))
+		from = X_DEFAULT, hotplug = TRUE;
 	xf86DrvMsg(scrn->scrnIndex, from, "hotplug detection: \"%s\"\n",
 			hotplug ? "enabled" : "disabled");
 	if (!hotplug)
@@ -654,16 +726,14 @@ sna_uevent_init(ScrnInfoPtr scrn)
 		return;
 
 	mon = udev_monitor_new_from_netlink(u, "udev");
-
 	if (!mon) {
 		udev_unref(u);
 		return;
 	}
 
 	if (udev_monitor_filter_add_match_subsystem_devtype(mon,
-				"drm",
-				"drm_minor") < 0 ||
-			udev_monitor_enable_receiving(mon) < 0)
+				"drm", "drm_minor") < 0 ||
+	    udev_monitor_enable_receiving(mon) < 0)
 	{
 		udev_monitor_unref(mon);
 		udev_unref(u);
@@ -681,23 +751,29 @@ sna_uevent_init(ScrnInfoPtr scrn)
 	}
 
 	sna->uevent_monitor = mon;
+
+	DBG(("%s: installed uvent handler\n", __FUNCTION__));
 }
 
 static void
 sna_uevent_fini(ScrnInfoPtr scrn)
 {
 	struct sna *sna = to_sna(scrn);
+	struct udev *u;
 
-	if (sna->uevent_handler) {
-		struct udev *u = udev_monitor_get_udev(sna->uevent_monitor);
+	if (sna->uevent_handler == NULL)
+		return;
 
-		xf86RemoveGeneralHandler(sna->uevent_handler);
+	xf86RemoveGeneralHandler(sna->uevent_handler);
 
-		udev_monitor_unref(sna->uevent_monitor);
-		udev_unref(u);
-		sna->uevent_handler = NULL;
-		sna->uevent_monitor = NULL;
-	}
+	u = udev_monitor_get_udev(sna->uevent_monitor);
+	udev_monitor_unref(sna->uevent_monitor);
+	udev_unref(u);
+
+	sna->uevent_handler = NULL;
+	sna->uevent_monitor = NULL;
+
+	DBG(("%s: removed uvent handler\n", __FUNCTION__));
 }
 #else
 static void sna_uevent_fini(ScrnInfoPtr scrn) { }
@@ -717,18 +793,6 @@ static void sna_leave_vt(VT_FUNC_ARGS_DECL)
 			   "drmDropMaster failed: %s\n", strerror(errno));
 }
 
-/* In order to workaround a kernel bug in not honouring O_NONBLOCK,
- * check that the fd is readable before attempting to read the next
- * event from drm.
- */
-static Bool sna_mode_has_pending_events(struct sna *sna)
-{
-	struct pollfd pfd;
-	pfd.fd = sna->kgem.fd;
-	pfd.events = POLLIN;
-	return poll(&pfd, 1, 0) == 1;
-}
-
 static Bool sna_early_close_screen(CLOSE_SCREEN_ARGS_DECL)
 {
 	ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
@@ -739,9 +803,7 @@ static Bool sna_early_close_screen(CLOSE_SCREEN_ARGS_DECL)
 	xf86_hide_cursors(scrn);
 	sna_uevent_fini(scrn);
 
-	/* drain the event queues */
-	if (sna_mode_has_pending_events(sna))
-		sna_mode_wakeup(sna);
+	sna_mode_close(sna);
 
 	if (sna->dri_open) {
 		sna_dri_close(sna, screen);
@@ -793,6 +855,7 @@ static void sna_mode_set(ScrnInfoPtr scrn)
 static Bool
 sna_register_all_privates(void)
 {
+#if HAS_DIXREGISTERPRIVATEKEY
 	if (!dixRegisterPrivateKey(&sna_pixmap_key, PRIVATE_PIXMAP,
 				   3*sizeof(void *)))
 		return FALSE;
@@ -808,6 +871,19 @@ sna_register_all_privates(void)
 	if (!dixRegisterPrivateKey(&sna_window_key, PRIVATE_WINDOW,
 				   2*sizeof(void *)))
 		return FALSE;
+#else
+	if (!dixRequestPrivate(&sna_pixmap_key, 3*sizeof(void *)))
+		return FALSE;
+
+	if (!dixRequestPrivate(&sna_gc_key, sizeof(FbGCPrivate)))
+		return FALSE;
+
+	if (!dixRequestPrivate(&sna_glyph_key, sizeof(struct sna_glyph)))
+		return FALSE;
+
+	if (!dixRequestPrivate(&sna_window_key, 2*sizeof(void *)))
+		return FALSE;
+#endif
 
 	return TRUE;
 }
@@ -815,7 +891,7 @@ sna_register_all_privates(void)
 static size_t
 agp_aperture_size(struct pci_device *dev, int gen)
 {
-	return dev->regions[gen < 30 ? 0 : 2].size;
+	return dev->regions[gen < 030 ? 0 : 2].size;
 }
 
 static Bool
@@ -983,24 +1059,9 @@ static void sna_free_screen(FREE_SCREEN_ARGS_DECL)
 static Bool sna_enter_vt(VT_FUNC_ARGS_DECL)
 {
 	SCRN_INFO_PTR(arg);
-	struct sna *sna = to_sna(scrn);
 
 	DBG(("%s\n", __FUNCTION__));
-
-	if (drmSetMaster(sna->kgem.fd)) {
-		xf86DrvMsg(scrn->scrnIndex, X_ERROR,
-			   "drmSetMaster failed: %s\n",
-			   strerror(errno));
-		return FALSE;
-	}
-
-	if (!xf86SetDesiredModes(scrn))
-		xf86DrvMsg(scrn->scrnIndex, X_WARNING,
-			   "failed to restore desired modes on VT switch\n");
-
-	sna_mode_disable_unused(sna);
-
-	return TRUE;
+	return sna_become_master(to_sna(scrn));
 }
 
 static Bool sna_switch_mode(SWITCH_MODE_ARGS_DECL)
@@ -1094,6 +1155,10 @@ Bool sna_init_scrn(ScrnInfoPtr scrn, int entity_num)
 	xf86DrvMsg(scrn->scrnIndex, X_INFO,
 		   "SNA compiled with assertions enabled\n");
 #endif
+#if DEBUG_SYNC
+	xf86DrvMsg(scrn->scrnIndex, X_INFO,
+		   "SNA compiled with synchronous rendering\n");
+#endif
 #if DEBUG_MEMORY
 	xf86DrvMsg(scrn->scrnIndex, X_INFO,
 		   "SNA compiled with memory allocation reporting enabled\n");
@@ -1117,11 +1182,15 @@ Bool sna_init_scrn(ScrnInfoPtr scrn, int entity_num)
 	scrn->ValidMode = sna_valid_mode;
 	scrn->PMEvent = sna_pm_event;
 
+#if XORG_VERSION_CURRENT >= XORG_VERSION_NUMERIC(1,9,99,901,0)
 	scrn->ModeSet = sna_mode_set;
+#endif
 
 	xf86SetEntitySharable(entity_num);
 	xf86SetEntityInstanceForScreen(scrn, entity_num,
 				       xf86GetNumEntityInstances(entity_num)-1);
+
+	sna_threads_init();
 
 	return TRUE;
 }

@@ -62,7 +62,7 @@ kgem_debug_get_bo_for_reloc_entry(struct kgem *kgem,
 		return NULL;
 
 	list_for_each_entry(bo, &kgem->next_request->buffers, request)
-		if (bo->handle == reloc->target_handle && bo->proxy == NULL)
+		if (bo->target_handle == reloc->target_handle && bo->proxy == NULL)
 			break;
 
 	assert(&bo->request != &kgem->next_request->buffers);
@@ -73,6 +73,9 @@ kgem_debug_get_bo_for_reloc_entry(struct kgem *kgem,
 static int kgem_debug_handle_is_fenced(struct kgem *kgem, uint32_t handle)
 {
 	int i;
+
+	if (kgem->has_handle_lut)
+		return kgem->exec[handle].flags & EXEC_OBJECT_NEEDS_FENCE;
 
 	for (i = 0; i < kgem->nexec; i++)
 		if (kgem->exec[i].handle == handle)
@@ -86,7 +89,7 @@ static int kgem_debug_handle_tiling(struct kgem *kgem, uint32_t handle)
 	struct kgem_bo *bo;
 
 	list_for_each_entry(bo, &kgem->next_request->buffers, request)
-		if (bo->handle == handle)
+		if (bo->target_handle == handle)
 			return bo->tiling;
 
 	return 0;
@@ -95,7 +98,7 @@ static int kgem_debug_handle_tiling(struct kgem *kgem, uint32_t handle)
 void
 kgem_debug_print(const uint32_t *data,
 		 uint32_t offset, unsigned int index,
-		 char *fmt, ...)
+		 const char *fmt, ...)
 {
 	va_list va;
 	char buf[240];
@@ -273,7 +276,7 @@ decode_2d(struct kgem *kgem, uint32_t offset)
 				 kgem_debug_handle_is_fenced(kgem, reloc->target_handle),
 				 kgem_debug_handle_tiling(kgem, reloc->target_handle));
 		kgem_debug_print(data, offset, 5, "color\n");
-		assert(kgem->gen >= 40 ||
+		assert(kgem->gen >= 040 ||
 		       kgem_debug_handle_is_fenced(kgem, reloc->target_handle));
 		return len;
 
@@ -321,7 +324,7 @@ decode_2d(struct kgem *kgem, uint32_t offset)
 				 reloc->read_domains, reloc->write_domain,
 				 kgem_debug_handle_is_fenced(kgem, reloc->target_handle),
 				 kgem_debug_handle_tiling(kgem, reloc->target_handle));
-		assert(kgem->gen >= 40 ||
+		assert(kgem->gen >= 040 ||
 		       kgem_debug_handle_is_fenced(kgem, reloc->target_handle));
 
 		kgem_debug_print(data, offset, 5, "src (%d,%d)\n",
@@ -336,7 +339,7 @@ decode_2d(struct kgem *kgem, uint32_t offset)
 				 reloc->read_domains, reloc->write_domain,
 				 kgem_debug_handle_is_fenced(kgem, reloc->target_handle),
 				 kgem_debug_handle_tiling(kgem, reloc->target_handle));
-		assert(kgem->gen >= 40 ||
+		assert(kgem->gen >= 040 ||
 		       kgem_debug_handle_is_fenced(kgem, reloc->target_handle));
 
 		return len;
@@ -368,18 +371,18 @@ decode_2d(struct kgem *kgem, uint32_t offset)
 
 static int (*decode_3d(int gen))(struct kgem*, uint32_t)
 {
-	if (gen >= 80) {
-	} else if (gen >= 70) {
+	if (gen >= 0100) {
+	} else if (gen >= 070) {
 		return kgem_gen7_decode_3d;
-	} else if (gen >= 60) {
+	} else if (gen >= 060) {
 		return kgem_gen6_decode_3d;
-	} else if (gen >= 50) {
+	} else if (gen >= 050) {
 		return kgem_gen5_decode_3d;
-	} else if (gen >= 40) {
+	} else if (gen >= 040) {
 		return kgem_gen4_decode_3d;
-	} else if (gen >= 30) {
+	} else if (gen >= 030) {
 		return kgem_gen3_decode_3d;
-	} else if (gen >= 20) {
+	} else if (gen >= 020) {
 		return kgem_gen2_decode_3d;
 	}
 	assert(0);
@@ -387,18 +390,18 @@ static int (*decode_3d(int gen))(struct kgem*, uint32_t)
 
 static void (*finish_state(int gen))(struct kgem*)
 {
-	if (gen >= 80) {
-	} else if (gen >= 70) {
+	if (gen >= 0100) {
+	} else if (gen >= 070) {
 		return kgem_gen7_finish_state;
-	} else if (gen >= 60) {
+	} else if (gen >= 060) {
 		return kgem_gen6_finish_state;
-	} else if (gen >= 50) {
+	} else if (gen >= 050) {
 		return kgem_gen5_finish_state;
-	} else if (gen >= 40) {
+	} else if (gen >= 040) {
 		return kgem_gen4_finish_state;
-	} else if (gen >= 30) {
+	} else if (gen >= 030) {
 		return kgem_gen3_finish_state;
-	} else if (gen >= 20) {
+	} else if (gen >= 020) {
 		return kgem_gen2_finish_state;
 	}
 	assert(0);

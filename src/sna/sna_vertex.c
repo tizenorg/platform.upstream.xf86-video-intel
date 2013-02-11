@@ -1,5 +1,5 @@
 /*
- * Copyright © 2007 Intel Corporation
+ * Copyright © 2013 Intel Corporation
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -21,28 +21,17 @@
  * SOFTWARE.
  *
  * Authors:
- *    Zhenyu Wang <zhenyu.z.wang@sna.com>
+ *    Chris Wilson <chris@chris-wilson.co.uk>
  *
  */
-#ifndef SNA_VIDEO_HWMC_H
-#define SNA_VIDEO_HWMC_H
 
-#define SNA_XVMC_LIBNAME	"IntelXvMC"
-#define SNA_XVMC_MAJOR	0
-#define SNA_XVMC_MINOR	1
-#define SNA_XVMC_PATCHLEVEL	0
+#include "sna.h"
 
-/* hw xvmc support type */
-#define XVMC_I915_MPEG2_MC	0x01
-#define XVMC_I965_MPEG2_MC	0x02
-#define XVMC_I945_MPEG2_VLD	0x04
-#define XVMC_I965_MPEG2_VLD	0x08
+#include <unistd.h>
 
-#ifdef _SNA_XVMC_SERVER_
-#include <xf86xvmc.h>
-Bool sna_video_xvmc_setup(struct sna *sna,
-			  ScreenPtr screen,
-			  XF86VideoAdaptorPtr target);
-#endif
-
-#endif
+void sna_vertex_init(struct sna *sna)
+{
+	pthread_mutex_init(&sna->render.lock, NULL);
+	pthread_cond_init(&sna->render.wait, NULL);
+	sna->render.active = 0;
+}

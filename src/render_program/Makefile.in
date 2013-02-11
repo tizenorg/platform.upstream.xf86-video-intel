@@ -143,7 +143,6 @@ LIB_MAN_SUFFIX = @LIB_MAN_SUFFIX@
 LIPO = @LIPO@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
-MAINT = @MAINT@
 MAKEINFO = @MAKEINFO@
 MANIFEST_TOOL = @MANIFEST_TOOL@
 MAN_SUBSTS = @MAN_SUBSTS@
@@ -182,6 +181,8 @@ VALGRIND_LIBS = @VALGRIND_LIBS@
 VERSION = @VERSION@
 X11_CFLAGS = @X11_CFLAGS@
 X11_LIBS = @X11_LIBS@
+XCB_CFLAGS = @XCB_CFLAGS@
+XCB_LIBS = @XCB_LIBS@
 XORG_CFLAGS = @XORG_CFLAGS@
 XORG_LIBS = @XORG_LIBS@
 XORG_MAN_PAGE = @XORG_MAN_PAGE@
@@ -435,7 +436,7 @@ all: $(BUILT_SOURCES)
 
 .SUFFIXES:
 .SUFFIXES: .g4a .g4b .g5a .g5b .g6a .g6b .g7a .g7b
-$(srcdir)/Makefile.in: @MAINTAINER_MODE_TRUE@ $(srcdir)/Makefile.am  $(am__configure_deps)
+$(srcdir)/Makefile.in:  $(srcdir)/Makefile.am  $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
 	    *$$dep*) \
@@ -460,9 +461,9 @@ Makefile: $(srcdir)/Makefile.in $(top_builddir)/config.status
 $(top_builddir)/config.status: $(top_srcdir)/configure $(CONFIG_STATUS_DEPENDENCIES)
 	cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) am--refresh
 
-$(top_srcdir)/configure: @MAINTAINER_MODE_TRUE@ $(am__configure_deps)
+$(top_srcdir)/configure:  $(am__configure_deps)
 	cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) am--refresh
-$(ACLOCAL_M4): @MAINTAINER_MODE_TRUE@ $(am__aclocal_m4_deps)
+$(ACLOCAL_M4):  $(am__aclocal_m4_deps)
 	cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) am--refresh
 $(am__aclocal_m4_deps):
 
@@ -627,21 +628,21 @@ uninstall-am:
 	uninstall uninstall-am
 
 @HAVE_GEN4ASM_TRUE@.g4a.g4b:
-@HAVE_GEN4ASM_TRUE@	m4 -I$(srcdir) -s $< > $*.g4m && @INTEL_GEN4ASM@ -o $@ $*.g4m && @INTEL_GEN4ASM@ -g 5 -o $@.gen5 $*.g4m && rm $*.g4m
+@HAVE_GEN4ASM_TRUE@	$(AM_V_GEN)m4 -I$(srcdir) -s $< > $*.g4m && @INTEL_GEN4ASM@ -o $@ $*.g4m && @INTEL_GEN4ASM@ -g 5 -o $@.gen5 $*.g4m && rm $*.g4m
 
 @HAVE_GEN4ASM_TRUE@.g5a.g5b:
-@HAVE_GEN4ASM_TRUE@	m4 -I$(srcdir) -s $< > $*.g5m && @INTEL_GEN4ASM@ -g 5 -o $@ $*.g5m && rm $*.g5m
+@HAVE_GEN4ASM_TRUE@	$(AM_V_GEN)m4 -I$(srcdir) -s $< > $*.g5m && @INTEL_GEN4ASM@ -g 5 -o $@ $*.g5m && rm $*.g5m
 
 @HAVE_GEN4ASM_TRUE@.g6a.g6b:
-@HAVE_GEN4ASM_TRUE@	m4 -I$(srcdir) -s $< > $*.g6m && @INTEL_GEN4ASM@ -g 6 -o $@ $*.g6m && rm $*.g6m
+@HAVE_GEN4ASM_TRUE@	$(AM_V_GEN)m4 -I$(srcdir) -s $< > $*.g6m && @INTEL_GEN4ASM@ -g 6 -o $@ $*.g6m && rm $*.g6m
 
 @HAVE_GEN4ASM_TRUE@.g7a.g7b:
-@HAVE_GEN4ASM_TRUE@	m4 -I$(srcdir) -s $< > $*.g7m && @INTEL_GEN4ASM@ -g 7 -o $@ $*.g7m && rm $*.g7m
+@HAVE_GEN4ASM_TRUE@	$(AM_V_GEN)m4 -I$(srcdir) -s $< > $*.g7m && @INTEL_GEN4ASM@ -g 7 -o $@ $*.g7m && rm $*.g7m
 
-@HAVE_GEN4ASM_TRUE@$(INTEL_G4B): $(INTEL_G4I)
-@HAVE_GEN4ASM_TRUE@$(INTEL_G5B): $(INTEL_G4I)
-@HAVE_GEN4ASM_TRUE@$(INTEL_G6B): $(INTEL_G4I) $(INTEL_G6I)
-@HAVE_GEN4ASM_TRUE@$(INTEL_G7B): $(INTEL_G4I) $(INTEL_G6I)
+@HAVE_GEN4ASM_TRUE@$(INTEL_G4B): $(INTEL_GEN4ASM) $(INTEL_G4I)
+@HAVE_GEN4ASM_TRUE@$(INTEL_G5B): $(INTEL_GEN4ASM) $(INTEL_G4I)
+@HAVE_GEN4ASM_TRUE@$(INTEL_G6B): $(INTEL_GEN4ASM) $(INTEL_G4I) $(INTEL_G6I)
+@HAVE_GEN4ASM_TRUE@$(INTEL_G7B): $(INTEL_GEN4ASM) $(INTEL_G4I) $(INTEL_G6I)
 
 @HAVE_GEN4ASM_TRUE@clean-local:
 @HAVE_GEN4ASM_TRUE@	-rm -f $(INTEL_G4B) $(INTEL_G4B_GEN5)

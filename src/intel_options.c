@@ -8,12 +8,13 @@ const OptionInfoRec intel_options[] = {
 	{OPTION_ACCEL_DISABLE,	"NoAccel",	OPTV_BOOLEAN,	{0},	0},
 	{OPTION_ACCEL_METHOD,	"AccelMethod",	OPTV_STRING,	{0},	0},
 	{OPTION_BACKLIGHT,	"Backlight",	OPTV_STRING,	{0},	0},
-	{OPTION_DRI,		"DRI",		OPTV_BOOLEAN,	{0},	1},
+	{OPTION_DRI,		"DRI",		OPTV_STRING,	{0},	0},
 	{OPTION_COLOR_KEY,	"ColorKey",	OPTV_INTEGER,	{0},	0},
 	{OPTION_VIDEO_KEY,	"VideoKey",	OPTV_INTEGER,	{0},	0},
 	{OPTION_TILING_2D,	"Tiling",	OPTV_BOOLEAN,	{0},	1},
 	{OPTION_TILING_FB,	"LinearFramebuffer",	OPTV_BOOLEAN,	{0},	0},
 	{OPTION_SWAPBUFFERS_WAIT, "SwapbuffersWait", OPTV_BOOLEAN,	{0},	1},
+	{OPTION_TRIPLE_BUFFER,	"TripleBuffer", OPTV_BOOLEAN,	{0},	1},
 	{OPTION_PREFER_OVERLAY, "XvPreferOverlay", OPTV_BOOLEAN, {0}, 0},
 	{OPTION_HOTPLUG,	"HotPlug",	OPTV_BOOLEAN,	{0},	1},
 	{OPTION_RELAXED_FENCING,"RelaxedFencing",	OPTV_BOOLEAN,	{0},	1},
@@ -21,9 +22,7 @@ const OptionInfoRec intel_options[] = {
 	{OPTION_XVMC,	"XvMC",		OPTV_BOOLEAN,	{0},	1},
 #endif
 #ifdef USE_SNA
-	{OPTION_THROTTLE,	"Throttle",	OPTV_BOOLEAN,	{0},	1},
 	{OPTION_ZAPHOD,		"ZaphodHeads",	OPTV_STRING,	{0},	0},
-	{OPTION_DELAYED_FLUSH,	"DelayedFlush",	OPTV_BOOLEAN,	{0},	1},
 	{OPTION_TEAR_FREE,	"TearFree",	OPTV_BOOLEAN,	{0},	0},
 	{OPTION_CRTC_PIXMAPS,	"PerCrtcPixmaps", OPTV_BOOLEAN,	{0},	0},
 #endif
@@ -33,7 +32,6 @@ const OptionInfoRec intel_options[] = {
 	{OPTION_DEBUG_FLUSH_CACHES, "DebugFlushCaches", OPTV_BOOLEAN, {0}, 0},
 	{OPTION_DEBUG_WAIT, "DebugWait", OPTV_BOOLEAN, {0}, 0},
 	{OPTION_BUFFER_CACHE,	"BufferCache",	OPTV_BOOLEAN,   {0},    1},
-	{OPTION_TRIPLE_BUFFER,	"TripleBuffer", OPTV_BOOLEAN,	{0},	1},
 #endif
 	{-1,			NULL,		OPTV_NONE,	{0},	0}
 };

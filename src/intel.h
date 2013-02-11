@@ -182,7 +182,7 @@ typedef struct intel_screen_private {
 	unsigned int batch_emit_start;
 	/** Number of bytes to be emitted in the current BEGIN_BATCH. */
 	uint32_t batch_emitting;
-	dri_bo *batch_bo;
+	dri_bo *batch_bo, *last_batch_bo[2];
 	/** Whether we're in a section of code that can't tolerate flushing */
 	Bool in_batch_atomic;
 	/** Ending batch_used that was verified by intel_start_batch_atomic() */
@@ -366,6 +366,7 @@ extern Bool intel_mode_pre_init(ScrnInfoPtr pScrn, int fd, int cpp);
 extern void intel_mode_init(struct intel_screen_private *intel);
 extern void intel_mode_disable_unused_functions(ScrnInfoPtr scrn);
 extern void intel_mode_remove_fb(intel_screen_private *intel);
+extern void intel_mode_close(intel_screen_private *intel);
 extern void intel_mode_fini(intel_screen_private *intel);
 
 extern int intel_get_pipe_from_crtc_id(drm_intel_bufmgr *bufmgr, xf86CrtcPtr crtc);
@@ -550,6 +551,9 @@ intel_get_transformed_coordinates(int x, int y, PictTransformPtr transform,
 Bool
 intel_get_transformed_coordinates_3d(int x, int y, PictTransformPtr transform,
 				    float *x_out, float *y_out, float *z_out);
+
+static inline void
+intel_debug_fallback(ScrnInfoPtr scrn, const char *format, ...) _X_ATTRIBUTE_PRINTF(2, 3);
 
 static inline void
 intel_debug_fallback(ScrnInfoPtr scrn, const char *format, ...)

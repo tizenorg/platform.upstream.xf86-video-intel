@@ -41,7 +41,7 @@
 
 #define MAKE_ATOM(a) MakeAtom(a, sizeof(a) - 1, TRUE)
 
-#define HAS_GAMMA(sna) ((sna)->kgem.gen >= 30)
+#define HAS_GAMMA(sna) ((sna)->kgem.gen >= 030)
 
 static Atom xvBrightness, xvContrast, xvSaturation, xvColorKey, xvPipe;
 static Atom xvGamma0, xvGamma1, xvGamma2, xvGamma3, xvGamma4, xvGamma5;
@@ -296,7 +296,7 @@ sna_video_overlay_query_best_size(ScrnInfoPtr scrn,
 		drw_h = vid_h >> 1;
 	}
 
-	if (sna->kgem.gen < 21) {
+	if (sna->kgem.gen < 021) {
 		max_w = IMAGE_MAX_WIDTH_LEGACY;
 		max_h = IMAGE_MAX_HEIGHT_LEGACY;
 	} else {
@@ -532,6 +532,7 @@ sna_video_overlay_put_image(ScrnInfoPtr scrn,
 		return BadAlloc;
 	}
 
+	frame.bo->domain = DOMAIN_NONE;
 	sna_video_buffer_fini(sna, video);
 
 	/* update cliplist */
@@ -554,7 +555,7 @@ sna_video_overlay_query_video_attributes(ScrnInfoPtr scrn,
 
 	DBG(("%s: w is %d, h is %d\n", __FUNCTION__, *w, *h));
 
-	if (sna->kgem.gen < 21) {
+	if (sna->kgem.gen < 021) {
 		if (*w > IMAGE_MAX_WIDTH_LEGACY)
 			*w = IMAGE_MAX_WIDTH_LEGACY;
 		if (*h > IMAGE_MAX_HEIGHT_LEGACY)
@@ -664,7 +665,7 @@ XF86VideoAdaptorPtr sna_video_overlay_setup(struct sna *sna,
 	adaptor->nEncodings = 1;
 	adaptor->pEncodings = xnfalloc(sizeof(DummyEncoding));
 	memcpy(adaptor->pEncodings, DummyEncoding, sizeof(DummyEncoding));
-	if (sna->kgem.gen < 21) {
+	if (sna->kgem.gen < 021) {
 		adaptor->pEncodings->width = IMAGE_MAX_WIDTH_LEGACY;
 		adaptor->pEncodings->height = IMAGE_MAX_HEIGHT_LEGACY;
 	}
@@ -701,6 +702,18 @@ XF86VideoAdaptorPtr sna_video_overlay_setup(struct sna *sna,
 	adaptor->PutImage = sna_video_overlay_put_image;
 	adaptor->QueryImageAttributes = sna_video_overlay_query_video_attributes;
 
+	if (sna->kgem.gen >= 040)
+		/* Actually the alignment is 64 bytes, too. But the
+		 * stride must be at least 512 bytes. Take the easy fix
+		 * and align on 512 bytes unconditionally. */
+		video->alignment = 512;
+	else if (sna->kgem.gen < 021)
+		/* Harsh, errata on these chipsets limit the stride
+		 * to be a multiple of 256 bytes.
+		 */
+		video->alignment = 256;
+	else
+		video->alignment = 64;
 	video->textured = false;
 	video->color_key = sna_video_overlay_color_key(sna);
 	video->brightness = -19;	/* (255/219) * -16 */

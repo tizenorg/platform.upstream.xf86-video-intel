@@ -11,6 +11,9 @@
 /* Enable pixmap debugging */
 #undef DEBUG_PIXMAP
 
+/* Enable synchronous rendering for debugging */
+#undef DEBUG_SYNC
+
 /* Default acceleration method */
 #undef DEFAULT_ACCEL_METHOD
 
@@ -22,6 +25,12 @@
 
 /* Enable pixman glyph cache */
 #undef HAS_PIXMAN_GLYPHS
+
+/* Enable pixman triangle rasterisation */
+#undef HAS_PIXMAN_TRIANGLES
+
+/* Enable if your compiler supports the Intel __sync_* atomic primitives */
+#undef HAVE_ATOMIC_PRIMITIVES
 
 /* Define to 1 if you have the <dgaproc.h> header file. */
 #undef HAVE_DGAPROC_H
@@ -46,6 +55,9 @@
 
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
+
+/* Enable if you have libatomic-ops-dev installed */
+#undef HAVE_LIB_ATOMIC_OPS
 
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H

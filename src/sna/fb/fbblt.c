@@ -270,7 +270,7 @@ fbBlt(FbBits *srcLine, FbStride srcStride, int srcX,
       int alu, FbBits pm, int bpp,
       Bool reverse, Bool upsidedown)
 {
-	DBG(("%s %dx%d, alu=%d, pm=%d, bpp=%d (reverse=%d, upsidedown=%d)\n",
+	DBG(("%s %dx%d, alu=%d, pm=%x, bpp=%d (reverse=%d, upsidedown=%d)\n",
 	     __FUNCTION__, width, height, alu, pm, bpp, reverse, upsidedown));
 
 	if (alu == GXcopy && pm == FB_ALLONES && ((srcX|dstX|width) & 7) == 0) {
@@ -285,9 +285,9 @@ fbBlt(FbBits *srcLine, FbStride srcStride, int srcX,
 		s += srcX >> 3;
 		d += dstX >> 3;
 
-		DBG(("%s fast blt, src_stride=%d, dst_stride=%d, width=%d (offset=%d)\n",
+		DBG(("%s fast blt, src_stride=%d, dst_stride=%d, width=%d (offset=%ld)\n",
 		     __FUNCTION__,
-		     srcStride, dstStride, width, s - d));
+		     srcStride, dstStride, width, (long)(s - d)));
 
 		if (width == srcStride && width == dstStride) {
 			width *= height;

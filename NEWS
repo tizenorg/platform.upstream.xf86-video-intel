@@ -1,3 +1,293 @@
+Release 2.21.2 (2013-02-10)
+===========================
+Pass the brown paper bags, I need half a dozen or so. That seemingly
+innocuous build fix to xorg-1.13 happned to have the little side-effect
+of breaking glyph rendering on xorg-1.12 and older on 64-bit machines.
+
+
+Release 2.21.1 (2013-02-10)
+===========================
+A fix for a potential GPU hang on 945gm (GMA3100) and earlier chipsets,
+along with backporting SNA to the packages found in stable distributions
+like Debian 6.0 (Squeeze).
+
+ * Cleanup compilation warnings from deblint, thanks to Paul Menzel
+
+ * Minor build improvements by Damien Lespiau.
+
+ * Disable generating span geometry for non-rectilinear spans on gen4
+   in order to work around and prevent one class of render corruption.
+
+ * Prevent cache thrashing and severe performance degradation on LLC
+   machines for streaming texture updates. However, note the effect was
+   only observed on just one particular laptop.
+
+ * Fix alignment of subsurface proxies for old chipsets.
+   https://bugs.launchpad.net/ubuntu/+source/xserver-xorg-video-intel/+bug/1120108
+
+ * Repair build against Xorg-1.6 and contemporary packages.
+
+
+Release 2.21.0 (2013-02-01)
+===========================
+A few new features:
+
+ * Enable render acceleration for Haswell GT1/GT2.
+
+ * Enable multi-threaded rasterisation of trapezoids and fallback composition
+
+ * Utilise a new kernel interface (v3.9) for processing relocations
+
+along with a few older features from the 2.20.x series:
+
+ * PRIME support for hotplug GPUs and hybrid systems
+
+ * Support for IvyBridge GT1 machines, aka HD2500 graphics.
+
+ * Stable 830gm/845g support, at last!
+
+As usual we have a large number of bug fixes since the last release:
+
+ * Prevent a stray relocation being left after a buffer is removed from
+   a batch, leading to GPU hangs.
+
+ * Make the driver more robust against its own failures to submit batches
+   by falling back to software rendering.
+
+ * Fix emission of scanline waits for secondary pipes on gen6/7. Otherwise
+   you may encounter GPU hangs in MI_WAIT_FOR_EVENT.
+
+ * Fix a missing corner pixel when drawing rectangles with PolyLines
+   https://bugs.freedesktop.org/show_bug.cgi?id=55484
+
+ * Don't try to use Y-tiling colour buffers with mesa/i915c as mesa
+   doesn't support them and wil fallback to software rendering
+
+ * Ensure that any cached mmaps are invalidated for a SwapBuffers
+   https://bugs.freedesktop.org/show_bug.cgi?id=60042
+
+ * Correctly handle the composition of rotated displays too large for the
+   3D pipeline
+   https://bugs.freedesktop.org/show_bug.cgi?id=60124
+
+ * Fix the computation of the planar video frame size
+   https://bugs.launchpad.net/ubuntu/+source/xserver-xorg-video-intel/+bug/1104180
+
+
+Release 2.20.19 (2013-01-20)
+============================
+A quick release as the last broke USB DisplayLink slave outputs badly. The
+performance of those displays was unusable due to an inadvertent change that
+caused us to flush the entire scanout over the USB for every drawing
+operation.
+
+ * Implement the GNOME Build API. A couple of minor changes to make
+   integrators and distributors lives a little easier, or at least more
+   consistent.
+
+ * Correctly offset inplace trapezoids for subwindows, such as the GTK+
+   close button after it has a background image uploaded.
+
+ * Explicitly prevent ring-switching for synchronized rendering to
+   scanouts (for vsync).
+
+ * Clip dirty region to slave pixmaps (otherwise UDL is nigh unusuable)
+   https://bugs.freedesktop.org/show_bug.cgi?id=59539
+
+
+Release 2.20.18 (2013-01-16)
+============================
+A bunch of miscellaneous fixes for assertion failures and various
+performance regressions when mixing new methods for offloads, along with
+a couple of improvements for rendering with gen4.
+
+ * Remove use of packed unnormalized texture coordinates on gen4/5 as
+   these GPUs do not support unnormalized coordinates in the sampler.
+
+ * Remove dependency upon x86 asm for cross-building to unsupported
+   architectures.
+   https://bugs.gentoo.org/show_bug.cgi?id=448570
+
+ * Apply damage around PRIME updates in the correct order.
+
+ * Correctly read the initial backlight level for when the user
+   overrides UXA's choice of backlight controller.
+
+ * Throttle UXA and prevent it queuing work much faster than the GPU can
+   complete it. This realised itself in impossible performance figures and
+   the entire display freezing for several seconds whlist the GPU caught
+   up. One side effect is that it also caused the DDX to consume more
+   memory than was required as it could not recycle buffers quick
+   enough, and in some cases this produces a marked improvement in
+   performance. Also note on gen2/3 this requires a new libdrm [2.4.41]
+   in order to prevent a bug causing the DDX to fallback to swrast.
+
+Release 2.20.17 (2012-12-26)
+============================
+A minor update to prepare for co-operating with the kernel over managing
+stability on 830gm/845g. On this pair of chipsets, the kernel will perform
+an extra copy of the batchbuffer into reserved memory, which prevents them
+from randomly dying. However, that extra copy does have a noticeable
+impact upon throughput, so we also have a mechanism for userspace to
+opt-out of the kernel workaround and take responsibility for ensuring its
+batches are coherent.
+
+ * Build fixes against xorg-1.14
+   https://bugs.freedesktop.org/show_bug.cgi?id=58552
+   https://bugs.freedesktop.org/show_bug.cgi?id=58406
+
+ * Fixed the origin of cropped (textured) video windows (Xv and XvMC)
+   https://bugs.freedesktop.org/show_bug.cgi?id=23033
+
+ * Fix potential corruption when using images larger than ~1GiB
+
+
+Release 2.20.16 (2012-12-15)
+============================
+Rejoice! We have found a trick to make 830gm/845g stable at long last.
+Ever since the switch to GEM and dynamic video memory, those early
+second generation chipsets have been plagued by instability. The lack of
+flushing cachelines from the CPU to GMCH was eventually solved by using
+an undocmented bit, but 830/845 were still hanging under memory pressure.
+These deaths were all due to garbage finding its way into the command
+streamer, and they go away if we take a leaf out of the original driver
+and never reuse those pages for anything else. So for the first time
+ever, I have been able to complete running the test suite on an 845g,
+even whilst thrashing the page and buffer caches!
+
+ * Run the SF stage as single-threaded on gen4 to workaround a few issues
+   https://bugs.freedesktop.org/show_bug.cgi?id=57410
+
+ * Keep the scanout SURFACE_STATE separate to avoid overriding its
+   memory access control on gen6/7 (i.e. writes to the scanout need to
+   be kept out of the render cache)
+
+ * Tune batch flushing after an operation to an exported surface under a
+   compositor.
+
+ * Make sure the source is on the CPU for inplace composition of trapezoids
+   using the CPU
+   https://bugs.freedesktop.org/show_bug.cgi?id=56825
+
+ * Immediately flush in the block hander after a split batch to reduce
+   latency between the two halves of an operation.
+   https://bugs.freedesktop.org/show_bug.cgi?id=51718
+
+ * Install a fallback config if we fail to install the desired config
+   at VT switch (i.e. booting, after resume with 3 incompatible pipes on
+   Ivybridge)
+
+ * Pin batches to avoid CS incoherence on 830/845
+   https://bugs.freedesktop.org/show_bug.cgi?id=26345
+
+
+Release 2.20.15 (2012-12-03)
+============================
+And lo, enabling more of the common acceleration paths for gen4 revealed
+another lurking bug - something is wrong with how we prepare Y-tiling
+surfaces for rendering. For the time being, we can surreptiously disable
+them for gen4 and avoid hitting GPU hangs.
+
+ * Avoid clobbering the render state after failing to convert the
+   operation to use the blitter.
+   https://bugs.freedesktop.org/show_bug.cgi?id=57601
+
+ * Disable shadow tracking upon server regeneration, and so fix a crash
+   if you restart the server whilst a RandR transform (e.g. rotation) is
+   in effect.
+   https://bugs.freedesktop.org/show_bug.cgi?id=52255
+   https://bugs.freedesktop.org/show_bug.cgi?id=56608
+
+
+Release 2.20.14 (2012-11-26)
+============================
+The highlight of this release is gen4, from 965g to gm45. Quite an old
+bug surfaced in the shader assembly, sparking a chance to review a few
+design choices within that backend and experiment on fresh ways to
+workaround the remaining issues.
+
+ * Avoid using inplace XOR'ed uploads for very large buffers
+   https://bugs.freedesktop.org/show_bug.cgi?id=57031
+
+ * Fix the gen4/5 opacity shader
+   https://bugs.freedesktop.org/show_bug.cgi?id=57054
+
+ * Queue a pending vblank request after flip completion
+   https://bugs.freedesktop.org/show_bug.cgi?id=56423
+
+ * Avoid migrating an uninitialised pixmap for use as a render source
+   https://bugs.freedesktop.org/show_bug.cgi?id=47597
+
+ * Improve handing of texture fallbacks for 830/845.
+   https://bugs.freedesktop.org/show_bug.cgi?id=57392
+
+
+Release 2.20.13 (2012-11-11)
+============================
+Nothing but bug fixes. Many thanks to everyone who took the time to
+report their issues, and for their help in improving the driver.
+
+ * Sanity check the platform probe points to our expected i915 device
+   https://bugs.launchpad.net/ubuntu/+source/xserver-xorg-video-intel/+bug/1069031
+
+ * Prevent 16-bit overflow for computing the sample area to upload of
+   sources for render operations
+   https://bugs.freedesktop.org/show_bug.cgi?id=56324
+
+ * Clamp the drawable box for migration to prevent 16-bit overflow
+   https://bugs.freedesktop.org/show_bug.cgi?id=56591
+
+ * Disable RandR hotplug events if Xinerama is enabled and thereby prevent
+   a crash upon hotplug
+   https://bugs.freedesktop.org/show_bug.cgi?id=55260
+
+ * Call ValidatePicture before attempting to flatten the alphamaps
+   https://bugs.freedesktop.org/show_bug.cgi?id=56367
+
+ * Clip the trapezoid correctly if it ends on the boundary pixel
+   https://bugs.freedesktop.org/show_bug.cgi?id=56395
+
+ * Make sure the pipeline choice is propagated to the scanline wait
+   across a batch flush
+   https://bugs.freedesktop.org/show_bug.cgi?id=47597
+
+ * Set the valid drawable box when choosing placement of BLT composite ops
+   https://bugs.freedesktop.org/show_bug.cgi?id=47597
+
+ * Prevent use-after-free when promoting a partial-GPU bo to a full-GPU bo
+   https://bugs.freedesktop.org/show_bug.cgi?id=56591
+
+ * gen4 opacity spans require the per-rectangle workaround
+   https://bugs.freedesktop.org/show_bug.cgi?id=55500
+
+ * Prevent use of invalid damage pointers when redirecting rendering
+   https://bugs.freedesktop.org/show_bug.cgi?id=56785
+
+
+Release 2.20.12 (2012-10-20)
+============================
+More bug reports, more bug fixes! Perhaps the headline feature is
+that with a secure batches, coming to a 3.8 kernel near you, we may
+finally have the ability to perform updates to the scanout synchronized
+to the refresh rate on later SandyBridge and IvyBridge chipsets. It comes
+at quite a power cost as we need to keep the GPU out of its power saving
+modes, but it should allow legacy vsync to function at last. But this
+should allow us to address a longstanding issue with tearing on
+SandyBridge+.
+
+ * Fix component-alpha rendering on IvyBridge, for example subpixel
+   antialiased glyphs.
+   https://bugs.freedesktop.org/show_bug.cgi?id=56037
+
+ * Flush before some "pipelined" state changes on gen4. The evidence is
+   that the same flushes as required on gen5+ are also required for gen4.
+   https://bugs.freedesktop.org/show_bug.cgi?id=55627
+
+ * Prevent a potential crash when forcing a stall on a busy CPU bo
+   https://bugs.freedesktop.org/show_bug.cgi?id=56180
+
+[Release 2.20.11 contained a typo causing UXA to fail immediately.]
+
 Release 2.20.10 (2012-10-14)
 ============================
 The last couple of weeks have been fairly retrospective, a dive into

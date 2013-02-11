@@ -117,11 +117,17 @@ static void read_boxes_inplace(struct kgem *kgem,
 
 static bool download_inplace(struct kgem *kgem, struct kgem_bo *bo)
 {
+	if (unlikely(kgem->wedged))
+		return true;
+
 	if (!kgem_bo_can_map(kgem, bo))
 		return false;
 
 	if (FORCE_INPLACE)
 		return FORCE_INPLACE > 0;
+
+	if (kgem->can_blt_cpu && kgem->max_cpu_size)
+		return false;
 
 	return !__kgem_bo_is_busy(kgem, bo) || bo->tiling == I915_TILING_NONE;
 }
@@ -364,7 +370,7 @@ fallback:
 
 	cmd = XY_SRC_COPY_BLT_CMD;
 	src_pitch = src_bo->pitch;
-	if (kgem->gen >= 40 && src_bo->tiling) {
+	if (kgem->gen >= 040 && src_bo->tiling) {
 		cmd |= BLT_SRC_TILED;
 		src_pitch >>= 2;
 	}
@@ -378,11 +384,13 @@ fallback:
 	case 1: break;
 	}
 
-	kgem_set_mode(kgem, KGEM_BLT);
-	if (!kgem_check_reloc_and_exec(kgem, 2) ||
-	    !kgem_check_batch(kgem, 8) ||
+	kgem_set_mode(kgem, KGEM_BLT, dst_bo);
+	if (!kgem_check_batch(kgem, 8) ||
+	    !kgem_check_reloc_and_exec(kgem, 2) ||
 	    !kgem_check_many_bo_fenced(kgem, dst_bo, src_bo, NULL)) {
-		_kgem_submit(kgem);
+		kgem_submit(kgem);
+		if (!kgem_check_many_bo_fenced(kgem, dst_bo, src_bo, NULL))
+			goto fallback;
 		_kgem_set_mode(kgem, KGEM_BLT);
 	}
 
@@ -483,7 +491,16 @@ fallback:
 
 static bool upload_inplace__tiled(struct kgem *kgem, struct kgem_bo *bo)
 {
-	if (kgem->gen < 50) /* bit17 swizzling :( */
+#ifndef __x86_64__
+	/* Between a register starved compiler emitting attrocious code
+	 * and the extra overhead in the kernel for managing the tight
+	 * 32-bit address space, unless we have a 64-bit system,
+	 * using memcpy_to_tiled_x() is extremely slow.
+	 */
+	return false;
+#endif
+
+	if (kgem->gen < 050) /* bit17 swizzling :( */
 		return false;
 
 	if (bo->tiling != I915_TILING_X)
@@ -579,18 +596,12 @@ static bool write_boxes_inplace(struct kgem *kgem,
 	return true;
 }
 
-static bool upload_inplace(struct kgem *kgem,
-			   struct kgem_bo *bo,
-			   const BoxRec *box,
-			   int n, int bpp)
+static bool __upload_inplace(struct kgem *kgem,
+			     struct kgem_bo *bo,
+			     const BoxRec *box,
+			     int n, int bpp)
 {
 	unsigned int bytes;
-
-	if (kgem->wedged)
-		return true;
-
-	if (!kgem_bo_can_map(kgem, bo) && !upload_inplace__tiled(kgem, bo))
-		return false;
 
 	if (FORCE_INPLACE)
 		return FORCE_INPLACE > 0;
@@ -608,6 +619,20 @@ static bool upload_inplace(struct kgem *kgem,
 		return bytes * bpp >> 12 >= kgem->half_cpu_cache_pages;
 	else
 		return bytes * bpp >> 12;
+}
+
+static bool upload_inplace(struct kgem *kgem,
+			   struct kgem_bo *bo,
+			   const BoxRec *box,
+			   int n, int bpp)
+{
+	if (unlikely(kgem->wedged))
+		return true;
+
+	if (!kgem_bo_can_map(kgem, bo) && !upload_inplace__tiled(kgem, bo))
+		return false;
+
+	return __upload_inplace(kgem, bo, box, n,bpp);
 }
 
 bool sna_write_boxes(struct sna *sna, PixmapPtr dst,
@@ -672,13 +697,17 @@ fallback:
 		     sna->render.max_3d_size, sna->render.max_3d_size));
 		if (must_tile(sna, tmp.drawable.width, tmp.drawable.height)) {
 			BoxRec tile, stack[64], *clipped, *c;
-			int step;
+			int cpp, step;
 
 tile:
-			step = MIN(sna->render.max_3d_size - 4096 / dst->drawable.bitsPerPixel,
-				   8*(MAXSHORT&~63) / dst->drawable.bitsPerPixel);
-			while (step * step * 4 > sna->kgem.max_upload_tile_size)
+			cpp = dst->drawable.bitsPerPixel / 8;
+			step = MIN(sna->render.max_3d_size,
+				   (MAXSHORT&~63) / cpp);
+			while (step * step * cpp > sna->kgem.max_upload_tile_size)
 				step /= 2;
+
+			if (step * cpp > 4096)
+				step = 4096 / cpp;
 
 			DBG(("%s: tiling upload, using %dx%d tiles\n",
 			     __FUNCTION__, step, step));
@@ -803,7 +832,7 @@ tile:
 
 	cmd = XY_SRC_COPY_BLT_CMD;
 	br13 = dst_bo->pitch;
-	if (kgem->gen >= 40 && dst_bo->tiling) {
+	if (kgem->gen >= 040 && dst_bo->tiling) {
 		cmd |= BLT_DST_TILED;
 		br13 >>= 2;
 	}
@@ -816,11 +845,13 @@ tile:
 	case 8: break;
 	}
 
-	kgem_set_mode(kgem, KGEM_BLT);
+	kgem_set_mode(kgem, KGEM_BLT, dst_bo);
 	if (!kgem_check_batch(kgem, 8) ||
 	    !kgem_check_reloc_and_exec(kgem, 2) ||
 	    !kgem_check_bo_fenced(kgem, dst_bo)) {
-		_kgem_submit(kgem);
+		kgem_submit(kgem);
+		if (!kgem_check_bo_fenced(kgem, dst_bo))
+			goto fallback;
 		_kgem_set_mode(kgem, KGEM_BLT);
 	}
 
@@ -960,6 +991,20 @@ write_boxes_inplace__xor(struct kgem *kgem,
 	} while (--n);
 }
 
+static bool upload_inplace__xor(struct kgem *kgem,
+				struct kgem_bo *bo,
+				const BoxRec *box,
+				int n, int bpp)
+{
+	if (unlikely(kgem->wedged))
+		return true;
+
+	if (!kgem_bo_can_map(kgem, bo))
+		return false;
+
+	return __upload_inplace(kgem, bo, box, n, bpp);
+}
+
 void sna_write_boxes__xor(struct sna *sna, PixmapPtr dst,
 			  struct kgem_bo *dst_bo, int16_t dst_dx, int16_t dst_dy,
 			  const void *src, int stride, int16_t src_dx, int16_t src_dy,
@@ -976,7 +1021,7 @@ void sna_write_boxes__xor(struct sna *sna, PixmapPtr dst,
 
 	DBG(("%s x %d\n", __FUNCTION__, nbox));
 
-	if (upload_inplace(kgem, dst_bo, box, nbox, dst->drawable.bitsPerPixel)) {
+	if (upload_inplace__xor(kgem, dst_bo, box, nbox, dst->drawable.bitsPerPixel)) {
 fallback:
 		write_boxes_inplace__xor(kgem,
 					 src, stride, dst->drawable.bitsPerPixel, src_dx, src_dy,
@@ -1158,7 +1203,7 @@ tile:
 
 	cmd = XY_SRC_COPY_BLT_CMD;
 	br13 = dst_bo->pitch;
-	if (kgem->gen >= 40 && dst_bo->tiling) {
+	if (kgem->gen >= 040 && dst_bo->tiling) {
 		cmd |= BLT_DST_TILED;
 		br13 >>= 2;
 	}
@@ -1171,11 +1216,13 @@ tile:
 	case 8: break;
 	}
 
-	kgem_set_mode(kgem, KGEM_BLT);
-	if (!kgem_check_reloc_and_exec(kgem, 2) ||
-	    !kgem_check_batch(kgem, 8) ||
+	kgem_set_mode(kgem, KGEM_BLT, dst_bo);
+	if (!kgem_check_batch(kgem, 8) ||
+	    !kgem_check_reloc_and_exec(kgem, 2) ||
 	    !kgem_check_bo_fenced(kgem, dst_bo)) {
-		_kgem_submit(kgem);
+		kgem_submit(kgem);
+		if (!kgem_check_bo_fenced(kgem, dst_bo))
+			goto fallback;
 		_kgem_set_mode(kgem, KGEM_BLT);
 	}
 

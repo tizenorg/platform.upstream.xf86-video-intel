@@ -170,7 +170,7 @@ intel_uxa_pixmap_compute_size(PixmapPtr pixmap,
 		pitch = (w * pixmap->drawable.bitsPerPixel + 7) / 8;
 		pitch = ALIGN(pitch, 64);
 		size = pitch * ALIGN (h, 2);
-		if (INTEL_INFO(intel)->gen < 40) {
+		if (INTEL_INFO(intel)->gen < 040) {
 			/* Gen 2/3 has a maximum stride for tiling of
 			 * 8192 bytes.
 			 */
@@ -209,7 +209,7 @@ intel_uxa_pixmap_compute_size(PixmapPtr pixmap,
 			tile_height = 8;
 		else
 			tile_height = 32;
-		aligned_h = ALIGN(h, tile_height);
+		aligned_h = ALIGN(h, 2*tile_height);
 
 		*stride = intel_get_fence_pitch(intel,
 						ALIGN(pitch, 512),
@@ -331,7 +331,7 @@ static void intel_uxa_solid(PixmapPtr pixmap, int x1, int y1, int x2, int y2)
 			cmd |=
 			    XY_COLOR_BLT_WRITE_ALPHA | XY_COLOR_BLT_WRITE_RGB;
 
-		if (INTEL_INFO(intel)->gen >= 40 && intel_pixmap_tiled(pixmap)) {
+		if (INTEL_INFO(intel)->gen >= 040 && intel_pixmap_tiled(pixmap)) {
 			assert((pitch % 512) == 0);
 			pitch >>= 2;
 			cmd |= XY_COLOR_BLT_TILED;
@@ -470,7 +470,7 @@ intel_uxa_copy(PixmapPtr dest, int src_x1, int src_y1, int dst_x1,
 			    XY_SRC_COPY_BLT_WRITE_ALPHA |
 			    XY_SRC_COPY_BLT_WRITE_RGB;
 
-		if (INTEL_INFO(intel)->gen >= 40) {
+		if (INTEL_INFO(intel)->gen >= 040) {
 			if (intel_pixmap_tiled(dest)) {
 				assert((dst_pitch % 512) == 0);
 				dst_pitch >>= 2;
@@ -1281,7 +1281,7 @@ intel_limits_init(intel_screen_private *intel)
 	 * the front, which will have an appropriate pitch/offset already set up,
 	 * so UXA doesn't need to worry.
 	 */
-	if (INTEL_INFO(intel)->gen >= 40) {
+	if (INTEL_INFO(intel)->gen >= 040) {
 		intel->accel_pixmap_offset_alignment = 4 * 2;
 		intel->accel_max_x = 8192;
 		intel->accel_max_y = 8192;
@@ -1290,6 +1290,17 @@ intel_limits_init(intel_screen_private *intel)
 		intel->accel_max_x = 2048;
 		intel->accel_max_y = 2048;
 	}
+}
+
+static Bool intel_option_accel_blt(intel_screen_private *intel)
+{
+	const char *s;
+
+	s = xf86GetOptValString(intel->Options, OPTION_ACCEL_METHOD);
+	if (s == NULL)
+		return FALSE;
+
+	return strcasecmp(s, "blt") == 0;
 }
 
 Bool intel_uxa_init(ScreenPtr screen)
@@ -1338,7 +1349,8 @@ Bool intel_uxa_init(ScreenPtr screen)
 	intel->uxa_driver->done_copy = intel_uxa_done;
 
 	/* Composite */
-	if (IS_GEN2(intel)) {
+	if (intel_option_accel_blt(intel)) {
+	} else if (IS_GEN2(intel)) {
 		intel->uxa_driver->check_composite = i830_check_composite;
 		intel->uxa_driver->check_composite_target = i830_check_composite_target;
 		intel->uxa_driver->check_composite_texture = i830_check_composite_texture;

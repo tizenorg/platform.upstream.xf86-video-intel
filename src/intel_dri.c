@@ -451,7 +451,7 @@ I830DRI2CopyRegion(DrawablePtr drawable, RegionPtr pRegion,
 	/* Wait for the scanline to be outside the region to be copied */
 	if (scrn->vtSema &&
 	    pixmap_is_scanout(get_drawable_pixmap(dst)) &&
-	    intel->swapbuffers_wait && INTEL_INFO(intel)->gen < 60) {
+	    intel->swapbuffers_wait && INTEL_INFO(intel)->gen < 060) {
 		BoxPtr box;
 		BoxRec crtcbox;
 		int y1, y2;
@@ -485,20 +485,20 @@ I830DRI2CopyRegion(DrawablePtr drawable, RegionPtr pRegion,
 			 * of extra time for the blitter to start up and
 			 * do its job for a full height blit
 			 */
-			if (full_height && INTEL_INFO(intel)->gen < 40)
+			if (full_height && INTEL_INFO(intel)->gen < 040)
 			    y2 -= 2;
 
 			if (pipe == 0) {
 				event = MI_WAIT_FOR_PIPEA_SCAN_LINE_WINDOW;
 				load_scan_lines_pipe =
 				    MI_LOAD_SCAN_LINES_DISPLAY_PIPEA;
-				if (full_height && INTEL_INFO(intel)->gen >= 40)
+				if (full_height && INTEL_INFO(intel)->gen >= 040)
 				    event = MI_WAIT_FOR_PIPEA_SVBLANK;
 			} else {
 				event = MI_WAIT_FOR_PIPEB_SCAN_LINE_WINDOW;
 				load_scan_lines_pipe =
 				    MI_LOAD_SCAN_LINES_DISPLAY_PIPEB;
-				if (full_height && INTEL_INFO(intel)->gen >= 40)
+				if (full_height && INTEL_INFO(intel)->gen >= 040)
 				    event = MI_WAIT_FOR_PIPEB_SVBLANK;
 			}
 
@@ -545,6 +545,23 @@ I830DRI2CopyRegion(DrawablePtr drawable, RegionPtr pRegion,
 	 * modesetting/dpms operations on the pipe.
 	 */
 	intel_batch_submit(scrn);
+}
+
+static void
+I830DRI2FallbackBlitSwap(DrawablePtr drawable,
+			 DRI2BufferPtr dst,
+			 DRI2BufferPtr src)
+{
+	BoxRec box;
+	RegionRec region;
+
+	box.x1 = 0;
+	box.y1 = 0;
+	box.x2 = drawable->width;
+	box.y2 = drawable->height;
+	REGION_INIT(pScreen, &region, &box, 0);
+
+	I830DRI2CopyRegion(drawable, &region, dst, src);
 }
 
 #if DRI2INFOREC_VERSION >= 4
@@ -996,17 +1013,8 @@ void I830DRI2FrameEventHandler(unsigned int frame, unsigned int tv_sec,
 
 		/* else fall through to exchange/blit */
 	case DRI2_SWAP: {
-		BoxRec box;
-		RegionRec region;
-
-		box.x1 = 0;
-		box.y1 = 0;
-		box.x2 = drawable->width;
-		box.y2 = drawable->height;
-		REGION_INIT(pScreen, &region, &box, 0);
-
-		I830DRI2CopyRegion(drawable,
-				   &region, swap_info->front, swap_info->back);
+		I830DRI2FallbackBlitSwap(drawable,
+					 swap_info->front, swap_info->back);
 		DRI2SwapComplete(swap_info->client, drawable, frame, tv_sec, tv_usec,
 				 DRI2_BLIT_COMPLETE,
 				 swap_info->client ? swap_info->event_complete : NULL,
@@ -1089,17 +1097,10 @@ void I830DRI2FlipEventHandler(unsigned int frame, unsigned int tv_sec,
 				i830_dri2_del_frame_event(chain_drawable, chain);
 			} else if (!can_exchange(chain_drawable, chain->front, chain->back) ||
 				   !I830DRI2ScheduleFlip(intel, chain_drawable, chain)) {
-				BoxRec box;
-				RegionRec region;
+				I830DRI2FallbackBlitSwap(chain_drawable,
+							 chain->front,
+							 chain->back);
 
-				box.x1 = 0;
-				box.y1 = 0;
-				box.x2 = chain_drawable->width;
-				box.y2 = chain_drawable->height;
-				REGION_INIT(pScreen, &region, &box, 0);
-
-				I830DRI2CopyRegion(chain_drawable, &region,
-						   chain->front, chain->back);
 				DRI2SwapComplete(chain->client, chain_drawable, frame, tv_sec, tv_usec,
 						 DRI2_BLIT_COMPLETE,
 						 chain->client ? chain->event_complete : NULL,
@@ -1162,8 +1163,6 @@ I830DRI2ScheduleSwap(ClientPtr client, DrawablePtr draw, DRI2BufferPtr front,
 	DRI2FrameEventPtr swap_info = NULL;
 	enum DRI2FrameEventType swap_type = DRI2_SWAP;
 	CARD64 current_msc;
-	BoxRec box;
-	RegionRec region;
 
 	/* Drawable not displayed... just complete the swap */
 	if (pipe == -1)
@@ -1231,7 +1230,13 @@ I830DRI2ScheduleSwap(ClientPtr client, DrawablePtr draw, DRI2BufferPtr front,
 	 * the swap.
 	 */
 	if (divisor == 0 || current_msc < *target_msc) {
-		if (flip && I830DRI2ScheduleFlip(intel, draw, swap_info))
+		/*
+		 * If we can, schedule the flip directly from here rather
+		 * than waiting for an event from the kernel for the current
+		 * (or a past) MSC.
+		 */
+		if (flip && divisor == 0 && current_msc >= *target_msc &&
+		    I830DRI2ScheduleFlip(intel, draw, swap_info))
 			return TRUE;
 
 		vbl.request.type =
@@ -1313,14 +1318,7 @@ I830DRI2ScheduleSwap(ClientPtr client, DrawablePtr draw, DRI2BufferPtr front,
 	return TRUE;
 
 blit_fallback:
-	box.x1 = 0;
-	box.y1 = 0;
-	box.x2 = draw->width;
-	box.y2 = draw->height;
-	REGION_INIT(pScreen, &region, &box, 0);
-
-	I830DRI2CopyRegion(draw, &region, front, back);
-
+	I830DRI2FallbackBlitSwap(draw, front, back);
 	DRI2SwapComplete(client, draw, 0, 0, 0, DRI2_BLIT_COMPLETE, func, data);
 	if (swap_info)
 	    i830_dri2_del_frame_event(draw, swap_info);
@@ -1515,6 +1513,17 @@ out_complete:
 static int dri2_server_generation;
 #endif
 
+static const char *dri_driver_name(intel_screen_private *intel)
+{
+	const char *s = xf86GetOptValString(intel->Options, OPTION_DRI);
+	Bool dummy;
+
+	if (s == NULL || xf86getBoolValue(&dummy, s))
+		return INTEL_INFO(intel)->gen < 040 ? "i915" : "i965";
+
+	return s;
+}
+
 Bool I830DRI2ScreenInit(ScreenPtr screen)
 {
 	ScrnInfoPtr scrn = xf86ScreenToScrn(screen);
@@ -1564,7 +1573,7 @@ Bool I830DRI2ScreenInit(ScreenPtr screen)
 	intel->deviceName = drmGetDeviceNameFromFd(intel->drmSubFD);
 	memset(&info, '\0', sizeof(info));
 	info.fd = intel->drmSubFD;
-	info.driverName = INTEL_INFO(intel)->gen < 40 ? "i915" : "i965";
+	info.driverName = dri_driver_name(intel);
 	info.deviceName = intel->deviceName;
 
 #if DRI2INFOREC_VERSION == 1
