@@ -1,12 +1,12 @@
 %define glamor 0
 
 Name:           xf86-video-intel
-Version:        2.20.10
+Version:        2.21.2
 Release:        0
 License:        MIT
 Summary:        Intel video driver for the Xorg X server
 Url:            http://xorg.freedesktop.org/
-Group:          System/X11/Servers/XF86_4
+Group:          System/X11/Servers
 Source0:        %{name}-%{version}.tar.bz2
 Source99:       baselibs.conf
 
@@ -82,7 +82,7 @@ make %{?_smp_mflags}
 
 %files
 %defattr(-,root,root)
-%doc COPYING
+%license COPYING
 %{_libdir}/libI810XvMC.so*
 %{_libdir}/libIntelXvMC.so*
 %dir %{_libdir}/xorg/modules/drivers
