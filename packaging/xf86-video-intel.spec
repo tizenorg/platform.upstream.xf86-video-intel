@@ -9,6 +9,7 @@ Url:            http://xorg.freedesktop.org/
 Group:          System/X11/Servers
 Source0:        %{name}-%{version}.tar.bz2
 Source99:       baselibs.conf
+Source1001: 	xf86-video-intel.manifest
 
 %if %glamor
 Requires:       glamor
@@ -59,6 +60,7 @@ the 830M and later.
 
 %prep
 %setup -q
+cp %{SOURCE1001} .
 
 %build
 autoreconf -fi
@@ -81,6 +83,7 @@ make %{?_smp_mflags}
 %postun -p /sbin/ldconfig
 
 %files
+%manifest %{name}.manifest
 %defattr(-,root,root)
 %license COPYING
 %{_libdir}/libI810XvMC.so*
