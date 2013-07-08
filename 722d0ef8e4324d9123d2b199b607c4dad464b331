@@ -1,0 +1,8 @@
+Change-Id: I722d0ef8e4324d9123d2b199b607c4dad464b331
+Code-Review+2: Ryan Ware <ware@linux.intel.com>
+Verified+1: Ryan Ware <ware@linux.intel.com>
+Submitted-by: Ryan Ware <ware@linux.intel.com>
+Submitted-at: Mon, 08 Jul 2013 09:38:14 -0700
+Reviewed-on: https://review.tizen.org/gerrit/5029
+Project: platform/upstream/xf86-video-intel
+Branch: refs/heads/tizen
