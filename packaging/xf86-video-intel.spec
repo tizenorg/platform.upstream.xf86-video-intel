@@ -1,3 +1,5 @@
+%bcond_with wayland
+%bcond_with x
 %define glamor 0
 
 Name:           xf86-video-intel
@@ -45,7 +47,13 @@ BuildRequires:  pkgconfig(xvmc)
 %if %glamor
 BuildRequires:  pkgconfig(glamor)
 %endif
+
+%if %{with x} && !%{with wayland}
 ExclusiveArch:  %ix86 x86_64
+%else
+ExclusiveArch:
+%endif
+
 
 %description
 intel is an Xorg driver for Intel integrated video cards.
