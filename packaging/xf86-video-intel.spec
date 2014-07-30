@@ -3,7 +3,7 @@
 %define glamor 0
 
 Name:           xf86-video-intel
-Version:        2.21.2
+Version:        2.21.15
 Release:        0
 License:        MIT
 Summary:        Intel video driver for the Xorg X server
