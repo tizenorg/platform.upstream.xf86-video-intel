@@ -74,7 +74,7 @@ cp %{SOURCE1001} .
 autoreconf -fi
 %configure \
 	--enable-uxa \
-	--enable-sna \
+	--disable-sna \
 %if %glamor
         --enable-glamor \
 %endif
