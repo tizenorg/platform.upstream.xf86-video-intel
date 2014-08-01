@@ -3,7 +3,7 @@
 %define glamor 0
 
 Name:           xf86-video-intel
-Version:        2.21.15
+Version:        2.99.914
 Release:        0
 License:        MIT
 Summary:        Intel video driver for the Xorg X server
@@ -98,5 +98,6 @@ make %{?_smp_mflags}
 %{_libdir}/libIntelXvMC.so*
 %dir %{_libdir}/xorg/modules/drivers
 %{_libdir}/xorg/modules/drivers/intel_drv.so
-
+%{_libexecdir}/xf86-video-intel-backlight-helper
+%{_datadir}/polkit-1/actions/org.x.xf86-video-intel.backlight-helper.policy
 %changelog
